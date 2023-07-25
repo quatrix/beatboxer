@@ -1,11 +1,14 @@
-use std::collections::HashMap;
+use anyhow::Result;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use axum::async_trait;
 
 use dashmap::DashMap;
-use keep_alive_sync::keep_alive_sync_client::KeepAliveSyncClient;
-use keep_alive_sync::ForwardRequest;
-use tokio::sync::RwLock;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    net::{TcpListener, TcpStream},
+    sync::RwLock,
+};
 use tracing::{debug, error, info};
 
 #[derive(Clone, Debug)]
@@ -14,20 +17,11 @@ struct KeepAliveUpdate {
     ts: i64,
 }
 
-pub mod keep_alive_sync {
-    tonic::include_proto!("keep_alive_sync");
-}
-
 pub struct KeepAlive {
+    server_addr: String,
     nodes: Vec<String>,
-    txs: DashMap<
-        String,
-        (
-            kanal::AsyncSender<KeepAliveUpdate>,
-            kanal::AsyncReceiver<KeepAliveUpdate>,
-        ),
-    >,
-    keep_alives: RwLock<HashMap<String, i64>>,
+    keep_alives: Arc<RwLock<HashMap<String, i64>>>,
+    txs: RwLock<Vec<kanal::AsyncSender<KeepAliveUpdate>>>,
 }
 
 #[async_trait]
@@ -36,75 +30,123 @@ pub trait KeepAliveTrait {
     async fn get(&self, id: &str) -> Option<i64>;
 }
 
-impl KeepAlive {
-    pub fn new(nodes: Vec<String>) -> KeepAlive {
-        let txs = DashMap::new();
-        for node in nodes.clone() {
-            let (tx, rx) = kanal::bounded_async(1024);
-            txs.insert(node, (tx, rx));
-        }
+// let txs = DashMap::new();
+// for node in nodes.clone() {
+//     let (tx, rx) = kanal::bounded_async(1024);
+//     txs.insert(node, (tx, rx));
+// }
 
+impl KeepAlive {
+    pub fn new(server_addr: String, nodes: Vec<String>) -> KeepAlive {
         KeepAlive {
+            server_addr,
             nodes,
-            txs,
-            keep_alives: RwLock::new(HashMap::new()),
+            keep_alives: Arc::new(RwLock::new(HashMap::new())),
+            txs: RwLock::new(Vec::new()),
         }
     }
 
-    pub async fn update(&self, id: String, ts: i64) {
-        debug!("got an update from node: {} {}", id, ts);
-        //self.keep_alives.insert(id, ts);
-        let mut ka = self.keep_alives.write().await;
+    pub async fn listen(&self) -> Result<()> {
+        let listener = TcpListener::bind(&self.server_addr).await?;
+        info!("Listening on: {}", self.server_addr);
 
-        match ka.get(&id) {
-            Some(current) => {
-                if *current < ts {
-                    ka.insert(id, ts);
+        loop {
+            let (mut socket, _) = listener.accept().await?;
+            info!("connected client: {:?}", socket);
+
+            let (tx, rx) = kanal::bounded_async(1024);
+            let mut txs = self.txs.write().await;
+            txs.push(tx);
+
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(ka) => {
+                            let line = format!("KA {} {}\n", ka.id, ka.ts);
+                            debug!("Sending: {}", line);
+                            match socket.write_all(line.as_bytes()).await {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    error!("Error writing to socket: {}", e);
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Error receiving from channel: {}", e);
+                            return;
+                        }
+                    }
                 }
-            }
-            None => {
-                ka.insert(id, ts);
-            }
+
+                // FIXME: handle client disconection
+                // remove tx from txs
+            });
         }
     }
 
     pub fn connect_to_nodes(&self) {
         for node in self.nodes.clone() {
-            let rx = self.txs.get(&node).unwrap().1.clone();
+            let kac = Arc::clone(&self.keep_alives);
             tokio::spawn(async move {
                 loop {
                     info!("Connecting to {}", node);
-                    match KeepAliveSyncClient::connect(format!("http://{}", node)).await {
-                        Ok(client) => {
-                            info!("Connected to {}", node);
-                            loop {
-                                match rx.recv().await {
-                                    Ok(ka) => {
-                                        let request = tonic::Request::new(ForwardRequest {
-                                            id: ka.id,
-                                            ts: ka.ts,
-                                        });
 
-                                        let mut c = client.clone();
-                                        tokio::spawn(async move {
-                                            let f = c.forward_ka(request);
-                                            match f.await {
-                                                Ok(_) => {}
+                    match TcpStream::connect(&node).await {
+                        Ok(socket) => {
+                            let mut socket = BufReader::new(socket);
+
+                            loop {
+                                let mut line = String::new();
+                                socket.read_line(&mut line).await.unwrap();
+
+                                if line.is_empty() {
+                                    break;
+                                }
+
+                                if line.starts_with("KA ") {
+                                    let line = line.trim();
+                                    let mut parts = line.split(' ');
+
+                                    // the KA part
+                                    parts.next();
+
+                                    match (parts.next(), parts.next()) {
+                                        (Some(id), Some(ts)) => {
+                                            debug!("Got KA from another node: {} {}", id, ts);
+                                            let ts = match ts.parse::<i64>() {
+                                                Ok(ts) => ts,
                                                 Err(e) => {
-                                                    error!("Error sending keep alive: {:?}", e);
+                                                    error!("Invalid ts '{}' error: {}", ts, e);
+                                                    continue;
+                                                }
+                                            };
+
+                                            let mut ka = kac.write().await;
+
+                                            match ka.get(id) {
+                                                Some(current) => {
+                                                    if *current < ts {
+                                                        ka.insert(id.to_string(), ts);
+                                                    }
+                                                }
+                                                None => {
+                                                    ka.insert(id.to_string(), ts);
                                                 }
                                             }
-                                        });
+                                        }
+                                        _ => {
+                                            error!("Invalid KA line: {}", line);
+                                        }
                                     }
-                                    Err(e) => {
-                                        error!("Error recv from channel: {:?}", e);
-                                    }
+                                } else {
+                                    println!("Got a line: {:?}", line);
                                 }
                             }
                         }
                         Err(e) => {
-                            error!("Error connecting: {:?}", e);
-                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                            error!("Error connecting to {}: {}", node, e);
+                            tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                     }
                 }
@@ -129,13 +171,18 @@ impl KeepAliveTrait for KeepAlive {
         let mut ka = self.keep_alives.write().await;
         ka.insert(id.to_string(), now);
 
-        for node in self.nodes.clone() {
-            let tx = self.txs.get(&node).unwrap().0.clone();
+        for tx in self.txs.read().await.iter() {
             let ka = KeepAliveUpdate {
                 id: id.to_string(),
                 ts: now,
             };
-            tx.send(ka).await.unwrap();
+            match tx.send(ka).await {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Error sending to channel: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }

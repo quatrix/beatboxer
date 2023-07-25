@@ -1,4 +1,14 @@
+use anyhow::Result;
 use std::sync::Arc;
+use tokio::io::BufReader;
+use tracing::debug;
+
+use tokio::io::AsyncBufReadExt;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
+
 use tonic::{transport::Server, Request, Response, Status};
 
 use axum::{
@@ -38,26 +48,6 @@ struct Args {
     #[arg(short, long)]
     nodes: Vec<String>,
 }
-struct KaSyncServer {
-    keep_alive: Arc<KeepAlive>,
-}
-
-#[async_trait]
-impl KeepAliveSync for KaSyncServer {
-    async fn forward_ka(
-        &self,
-        request: Request<ForwardRequest>,
-    ) -> Result<Response<ForwardResponse>, Status> {
-        self.keep_alive
-            .update(request.get_ref().id.clone(), request.get_ref().ts)
-            .await;
-
-        let response = ForwardResponse {
-            status: "OK".to_string(),
-        };
-        Ok(Response::new(response))
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -71,18 +61,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let keep_alive = Arc::new(KeepAlive::new(args.nodes.clone()));
+    let keep_alive = Arc::new(KeepAlive::new(
+        args.ka_sync_addr.clone(),
+        args.nodes.clone(),
+    ));
     keep_alive.connect_to_nodes();
-
-    let ka_sync_addr = args.ka_sync_addr.parse()?;
-    let ka_sync_server = KaSyncServer {
-        keep_alive: Arc::clone(&keep_alive),
-    };
-
-    let grpc = Server::builder()
-        .tcp_keepalive(Some(std::time::Duration::from_secs(5)))
-        .add_service(KeepAliveSyncServer::new(ka_sync_server))
-        .serve(ka_sync_addr);
 
     let cloned_keep_alive = Arc::clone(&keep_alive);
 
@@ -100,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Server running on http://{}", addr);
 
     tokio::select! {
-        _ = grpc => { }
+        _ = keep_alive.listen() => { }
         _ = http_server => { }
     };
 

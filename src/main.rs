@@ -11,7 +11,7 @@ use axum::{
 };
 use clap::Parser;
 use keep_alive::KeepAliveTrait;
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
 use crate::keep_alive::KeepAlive;
@@ -49,7 +49,8 @@ impl KeepAliveSync for KaSyncServer {
         request: Request<ForwardRequest>,
     ) -> Result<Response<ForwardResponse>, Status> {
         self.keep_alive
-            .update(request.get_ref().id.clone(), request.get_ref().ts);
+            .update(request.get_ref().id.clone(), request.get_ref().ts)
+            .await;
 
         let response = ForwardResponse {
             status: "OK".to_string(),
@@ -99,8 +100,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Server running on http://{}", addr);
 
     tokio::select! {
-        _ = grpc => {},
-        _ = http_server => {},
+        _ = grpc => { }
+        _ = http_server => { }
     };
 
     Ok(())

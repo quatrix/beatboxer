@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
 use axum::async_trait;
 
 use dashmap::DashMap;
 use keep_alive_sync::keep_alive_sync_client::KeepAliveSyncClient;
 use keep_alive_sync::ForwardRequest;
-use tokio::sync::broadcast;
+use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
 #[derive(Clone, Debug)]
@@ -25,7 +27,7 @@ pub struct KeepAlive {
             kanal::AsyncReceiver<KeepAliveUpdate>,
         ),
     >,
-    keep_alives: DashMap<String, i64>,
+    keep_alives: RwLock<HashMap<String, i64>>,
 }
 
 #[async_trait]
@@ -45,13 +47,25 @@ impl KeepAlive {
         KeepAlive {
             nodes,
             txs,
-            keep_alives: DashMap::new(),
+            keep_alives: RwLock::new(HashMap::new()),
         }
     }
 
-    pub fn update(&self, id: String, ts: i64) {
+    pub async fn update(&self, id: String, ts: i64) {
         debug!("got an update from node: {} {}", id, ts);
-        self.keep_alives.insert(id, ts);
+        //self.keep_alives.insert(id, ts);
+        let mut ka = self.keep_alives.write().await;
+
+        match ka.get(&id) {
+            Some(current) => {
+                if *current < ts {
+                    ka.insert(id, ts);
+                }
+            }
+            None => {
+                ka.insert(id, ts);
+            }
+        }
     }
 
     pub fn connect_to_nodes(&self) {
@@ -61,7 +75,7 @@ impl KeepAlive {
                 loop {
                     info!("Connecting to {}", node);
                     match KeepAliveSyncClient::connect(format!("http://{}", node)).await {
-                        Ok(mut client) => {
+                        Ok(client) => {
                             info!("Connected to {}", node);
                             loop {
                                 match rx.recv().await {
@@ -71,15 +85,16 @@ impl KeepAlive {
                                             ts: ka.ts,
                                         });
 
-                                        match client.forward_ka(request).await {
-                                            Ok(response) => {
-                                                debug!("Response: {:?}", response);
+                                        let mut c = client.clone();
+                                        tokio::spawn(async move {
+                                            let f = c.forward_ka(request);
+                                            match f.await {
+                                                Ok(_) => {}
+                                                Err(e) => {
+                                                    error!("Error sending keep alive: {:?}", e);
+                                                }
                                             }
-                                            Err(e) => {
-                                                error!("Error forwarding: {:?}", e);
-                                                break;
-                                            }
-                                        };
+                                        });
                                     }
                                     Err(e) => {
                                         error!("Error recv from channel: {:?}", e);
@@ -101,7 +116,8 @@ impl KeepAlive {
 #[async_trait]
 impl KeepAliveTrait for KeepAlive {
     async fn get(&self, id: &str) -> Option<i64> {
-        self.keep_alives.get(id).map(|ts| *ts)
+        let ka = self.keep_alives.read().await;
+        ka.get(id).copied()
     }
 
     async fn pulse(&self, id: &str) {
@@ -110,7 +126,8 @@ impl KeepAliveTrait for KeepAlive {
             .unwrap()
             .as_millis() as i64;
 
-        self.keep_alives.insert(id.to_string(), now);
+        let mut ka = self.keep_alives.write().await;
+        ka.insert(id.to_string(), now);
 
         for node in self.nodes.clone() {
             let tx = self.txs.get(&node).unwrap().0.clone();

@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package keep_alive_sync;
+
+service KeepAliveSync {
+  rpc ForwardKA (ForwardRequest) returns (ForwardResponse) {}
+}
+
+message ForwardRequest {
+  string id = 1;
+  int64 ts = 2;
+}
+
+message ForwardResponse {
+  string status = 1;
+}

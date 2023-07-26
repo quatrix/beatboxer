@@ -1,38 +1,26 @@
 use anyhow::Result;
-use std::sync::Arc;
-use tokio::io::BufReader;
-use tracing::debug;
-
-use tokio::io::AsyncBufReadExt;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-};
-
-use tonic::{transport::Server, Request, Response, Status};
+use std::{future::ready, sync::Arc};
 
 use axum::{
-    async_trait,
     extract::{Path, State},
     http::StatusCode,
+    middleware,
     response::IntoResponse,
     routing::get,
     Router,
 };
 use clap::Parser;
 use keep_alive::KeepAliveTrait;
-use tracing::{error, info};
+use tracing::info;
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
-use crate::keep_alive::KeepAlive;
-use keep_alive_sync::keep_alive_sync_server::{KeepAliveSync, KeepAliveSyncServer};
-use keep_alive_sync::{ForwardRequest, ForwardResponse};
-
-pub mod keep_alive_sync {
-    tonic::include_proto!("keep_alive_sync");
-}
+use crate::{
+    keep_alive::KeepAlive,
+    metrics::{setup_metrics_recorder, track_metrics},
+};
 
 mod keep_alive;
+mod metrics;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -69,9 +57,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cloned_keep_alive = Arc::clone(&keep_alive);
 
+    let recorder_handle = setup_metrics_recorder()?;
+
     let app = Router::new()
         .route("/pulse/:id", get(pulse_handler))
         .route("/ka/:id", get(get_ka_handler))
+        .layer(middleware::from_fn(track_metrics))
+        .route("/metrics", get(move || ready(recorder_handle.render())))
         .with_state(cloned_keep_alive);
 
     let addr = format!("{}:{}", args.http_host, args.http_port)

@@ -140,12 +140,20 @@ impl KeepAlive {
                         Ok(socket) => {
                             let mut socket = BufReader::new(socket);
 
+                            let node_ip = match socket.get_ref().peer_addr() {
+                                Ok(ip) => ip,
+                                Err(e) => {
+                                    error!("Error getting peer addr: {}", e);
+                                    continue;
+                                }
+                            };
+
                             // send a SYNC command
                             match socket.write_all(b"SYNC\n").await {
                                 Ok(_) => {}
                                 Err(e) => {
                                     error!("Error writing to socket: {}", e);
-                                    return;
+                                    continue;
                                 }
                             }
 
@@ -223,7 +231,7 @@ impl KeepAlive {
                                             metrics::histogram!(
                                                 "message_sync_latency_seconds",
                                                 latency as f64 / 1000.0,
-                                                "" => ""
+                                                "node_ip" => format!("{}", node_ip),
                                             );
 
                                             let mut ka = kac.write().await;

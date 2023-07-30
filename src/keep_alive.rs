@@ -24,7 +24,7 @@ pub struct KeepAlive {
     server_addr: String,
     nodes: Vec<String>,
     keep_alives: Arc<dyn Storage + Send + Sync>,
-    txs: Arc<RwLock<Vec<Arc<kanal::AsyncSender<KeepAliveUpdate>>>>>,
+    txs: Arc<RwLock<Vec<kanal::AsyncSender<KeepAliveUpdate>>>>,
 }
 
 #[async_trait]
@@ -58,8 +58,8 @@ impl KeepAlive {
             let (tx, rx) = kanal::bounded_async(102400);
             let mut txs = self.txs.write().await;
             let kac = Arc::clone(&self.keep_alives);
-            let txsc = Arc::clone(&self.txs);
-            txs.push(Arc::new(tx));
+
+            txs.push(tx);
 
             tokio::spawn(async move {
                 let mut buf = vec![0; 1024];
@@ -129,8 +129,6 @@ impl KeepAlive {
                 }
 
                 info!("Client disconnected: {:?}", socket);
-                let mut txs = txsc.write().await;
-                txs.retain(|tx| !tx.is_closed());
             });
         }
     }
@@ -261,23 +259,20 @@ impl KeepAliveTrait for KeepAlive {
 
         self.keep_alives.set(id, now).await;
 
-        // FIXME: not sure it's a good idead to always
-        // lock write, as it's serializes writes to the channels
-        // maybe the disconnected sockets should be
-        // handled elsewhere
-        let mut txs = self.txs.write().await;
-
         let ka = KeepAliveUpdate {
             id: id.to_string(),
             ts: now,
         };
 
-        txs.retain(|sender| {
-            match sender.try_send(ka.clone()) {
-                Ok(_) => true,
-                Err(SendError::Closed) => false,
-                Err(SendError::ReceiveClosed) => true, // handle full case as per your use case
+        let txs = self.txs.read().await;
+
+        for tx in txs.iter() {
+            let txc = tx.clone();
+            match txc.send(ka.clone()).await {
+                Ok(_) => {}
+                Err(SendError::Closed) => error!("socket closed"),
+                Err(SendError::ReceiveClosed) => error!("receive closed"),
             }
-        });
+        }
     }
 }

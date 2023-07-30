@@ -69,10 +69,4 @@ impl Storage for InMemoryStorage {
         let bin = to_allocvec(&*data)?;
         Ok(bin)
     }
-
-    fn clone(&self) -> InMemoryStorage {
-        Self {
-            data: Arc::clone(&self.data),
-        }
-    }
 }

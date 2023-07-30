@@ -2,8 +2,7 @@ use std::{collections::HashMap, hash::Hash, sync::Arc};
 
 use axum::async_trait;
 use postcard::to_allocvec;
-use rocksdb::{Options, DB};
-use tokio::sync::RwLock;
+use rocksdb::DB;
 
 use anyhow::Result;
 
@@ -59,11 +58,5 @@ impl Storage for PersistentStorage {
         }
         let bin = to_allocvec(&h)?;
         Ok(bin)
-    }
-
-    fn clone(&self) -> Self {
-        Self {
-            db: Arc::clone(&self.db),
-        }
     }
 }

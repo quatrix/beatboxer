@@ -10,5 +10,5 @@ pub trait Storage {
     async fn set(&self, id: &str, ts: i64);
     async fn bulk_set(&self, new_data: HashMap<String, i64>);
     async fn serialize(&self) -> Result<Vec<u8>>;
-    fn clone(&self) -> Self;
+    //fn clone(&self) -> Self;
 }

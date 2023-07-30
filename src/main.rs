@@ -3,7 +3,7 @@ use std::{future::ready, sync::Arc};
 use tatum::{
     keep_alive::{KeepAlive, KeepAliveTrait},
     metrics::{setup_metrics_recorder, track_metrics},
-    storage::{memory::InMemoryStorage, persistent::PersistentStorage},
+    storage::{memory::InMemoryStorage, persistent::PersistentStorage, Storage},
 };
 
 use axum::{
@@ -31,6 +31,20 @@ struct Args {
 
     #[arg(short, long)]
     nodes: Vec<String>,
+
+    #[arg(short, long)]
+    use_rocksdb: bool,
+}
+
+fn get_storage(use_rocksdb: bool, http_port: u16) -> Arc<dyn Storage + Sync + Send> {
+    if use_rocksdb {
+        Arc::new(PersistentStorage::new(&format!(
+            "/tmp/tatum_{}.db",
+            http_port
+        )))
+    } else {
+        Arc::new(InMemoryStorage::new())
+    }
 }
 
 #[tokio::main]
@@ -45,8 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    //let storage = InMemoryStorage::new();
-    let storage = PersistentStorage::new(&format!("/tmp/tatum_{}.db", args.http_port));
+    let storage = get_storage(args.use_rocksdb, args.http_port);
 
     let keep_alive = Arc::new(KeepAlive::new(
         args.ka_sync_addr.clone(),

@@ -19,10 +19,10 @@ struct KeepAliveUpdate {
     ts: i64,
 }
 
-pub struct KeepAlive<T: Storage> {
+pub struct KeepAlive {
     server_addr: String,
     nodes: Vec<String>,
-    keep_alives: T,
+    keep_alives: Arc<dyn Storage + Send + Sync>,
     txs: Arc<RwLock<Vec<kanal::AsyncSender<KeepAliveUpdate>>>>,
 }
 
@@ -32,8 +32,12 @@ pub trait KeepAliveTrait {
     async fn get(&self, id: &str) -> Option<i64>;
 }
 
-impl<T: Storage + Sync + Send + 'static> KeepAlive<T> {
-    pub fn new(server_addr: String, nodes: Vec<String>, storage: T) -> KeepAlive<T> {
+impl KeepAlive {
+    pub fn new(
+        server_addr: String,
+        nodes: Vec<String>,
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> KeepAlive {
         KeepAlive {
             server_addr,
             nodes,
@@ -52,7 +56,7 @@ impl<T: Storage + Sync + Send + 'static> KeepAlive<T> {
 
             let (tx, rx) = kanal::bounded_async(102400);
             let mut txs = self.txs.write().await;
-            let kac = self.keep_alives.clone();
+            let kac = Arc::clone(&self.keep_alives);
             let txsc = Arc::clone(&self.txs);
             txs.push(tx);
 
@@ -132,7 +136,7 @@ impl<T: Storage + Sync + Send + 'static> KeepAlive<T> {
 
     pub fn connect_to_nodes(&self) {
         for node in self.nodes.clone() {
-            let kac = self.keep_alives.clone();
+            let kac = Arc::clone(&self.keep_alives);
             tokio::spawn(async move {
                 loop {
                     info!("Connecting to {}", node);
@@ -243,7 +247,7 @@ impl<T: Storage + Sync + Send + 'static> KeepAlive<T> {
 }
 
 #[async_trait]
-impl<T: Storage + Sync + Send> KeepAliveTrait for KeepAlive<T> {
+impl KeepAliveTrait for KeepAlive {
     async fn get(&self, id: &str) -> Option<i64> {
         self.keep_alives.get(id).await
     }

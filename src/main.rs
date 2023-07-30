@@ -1,5 +1,10 @@
 use anyhow::Result;
 use std::{future::ready, sync::Arc};
+use tatum::{
+    keep_alive::{KeepAlive, KeepAliveTrait},
+    metrics::{setup_metrics_recorder, track_metrics},
+    storage::{memory::InMemoryStorage, persistent::PersistentStorage},
+};
 
 use axum::{
     extract::{Path, State},
@@ -10,17 +15,8 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use keep_alive::KeepAliveTrait;
 use tracing::info;
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
-
-use crate::{
-    keep_alive::KeepAlive,
-    metrics::{setup_metrics_recorder, track_metrics},
-};
-
-mod keep_alive;
-mod metrics;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -49,9 +45,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    //let storage = InMemoryStorage::new();
+    let storage = PersistentStorage::new(&format!("/tmp/tatum_{}.db", args.http_port));
+
     let keep_alive = Arc::new(KeepAlive::new(
         args.ka_sync_addr.clone(),
         args.nodes.clone(),
+        storage,
     ));
     keep_alive.connect_to_nodes();
 

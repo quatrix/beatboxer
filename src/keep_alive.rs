@@ -1,5 +1,5 @@
 use anyhow::Result;
-use postcard::{from_bytes, to_allocvec};
+use postcard::from_bytes;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use axum::async_trait;
@@ -11,16 +11,18 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
+use crate::storage::Storage;
+
 #[derive(Clone, Debug)]
 struct KeepAliveUpdate {
     id: String,
     ts: i64,
 }
 
-pub struct KeepAlive {
+pub struct KeepAlive<T: Storage> {
     server_addr: String,
     nodes: Vec<String>,
-    keep_alives: Arc<RwLock<HashMap<String, i64>>>,
+    keep_alives: T,
     txs: Arc<RwLock<Vec<kanal::AsyncSender<KeepAliveUpdate>>>>,
 }
 
@@ -30,12 +32,12 @@ pub trait KeepAliveTrait {
     async fn get(&self, id: &str) -> Option<i64>;
 }
 
-impl KeepAlive {
-    pub fn new(server_addr: String, nodes: Vec<String>) -> KeepAlive {
+impl<T: Storage + Sync + Send + 'static> KeepAlive<T> {
+    pub fn new(server_addr: String, nodes: Vec<String>, storage: T) -> KeepAlive<T> {
         KeepAlive {
             server_addr,
             nodes,
-            keep_alives: Arc::new(RwLock::new(HashMap::new())),
+            keep_alives: storage,
             txs: Arc::new(RwLock::new(Vec::new())),
         }
     }
@@ -50,7 +52,7 @@ impl KeepAlive {
 
             let (tx, rx) = kanal::bounded_async(102400);
             let mut txs = self.txs.write().await;
-            let kac = Arc::clone(&self.keep_alives);
+            let kac = self.keep_alives.clone();
             let txsc = Arc::clone(&self.txs);
             txs.push(tx);
 
@@ -75,8 +77,7 @@ impl KeepAlive {
                         };
 
                         if n == 5 && buf[0..n] == *b"SYNC\n" {
-                            let ka = kac.read().await;
-                            let ka = to_allocvec(&*ka).unwrap();
+                            let ka = kac.serialize().await.unwrap();
                             let ka_len = format!("{}\n", ka.len());
                             info!("Sending SYNC: {}", ka.len());
                             match socket.write_all(ka_len.as_bytes()).await {
@@ -131,7 +132,7 @@ impl KeepAlive {
 
     pub fn connect_to_nodes(&self) {
         for node in self.nodes.clone() {
-            let kac = Arc::clone(&self.keep_alives);
+            let kac = self.keep_alives.clone();
             tokio::spawn(async move {
                 loop {
                     info!("Connecting to {}", node);
@@ -178,22 +179,7 @@ impl KeepAlive {
                                 }
                             };
 
-                            {
-                                let mut kac = kac.write().await;
-
-                                for (id, ts) in ka {
-                                    match kac.get(&id) {
-                                        Some(current) => {
-                                            if *current < ts {
-                                                kac.insert(id, ts);
-                                            }
-                                        }
-                                        None => {
-                                            kac.insert(id, ts);
-                                        }
-                                    }
-                                }
-                            }
+                            kac.bulk_set(ka).await;
 
                             loop {
                                 let mut line = String::new();
@@ -234,18 +220,7 @@ impl KeepAlive {
                                                 "node_ip" => format!("{}", node_ip),
                                             );
 
-                                            let mut ka = kac.write().await;
-
-                                            match ka.get(id) {
-                                                Some(current) => {
-                                                    if *current < ts {
-                                                        ka.insert(id.to_string(), ts);
-                                                    }
-                                                }
-                                                None => {
-                                                    ka.insert(id.to_string(), ts);
-                                                }
-                                            }
+                                            kac.set(id, ts).await;
                                         }
                                         _ => {
                                             error!("Invalid KA line: {}", line);
@@ -268,10 +243,9 @@ impl KeepAlive {
 }
 
 #[async_trait]
-impl KeepAliveTrait for KeepAlive {
+impl<T: Storage + Sync + Send> KeepAliveTrait for KeepAlive<T> {
     async fn get(&self, id: &str) -> Option<i64> {
-        let ka = self.keep_alives.read().await;
-        ka.get(id).copied()
+        self.keep_alives.get(id).await
     }
 
     async fn pulse(&self, id: &str) {
@@ -280,8 +254,7 @@ impl KeepAliveTrait for KeepAlive {
             .unwrap()
             .as_millis() as i64;
 
-        let mut ka = self.keep_alives.write().await;
-        ka.insert(id.to_string(), now);
+        self.keep_alives.set(id, now).await;
 
         let txs = self.txs.read().await;
 

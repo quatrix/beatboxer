@@ -1,4 +1,5 @@
 use anyhow::Result;
+use kanal::SendError;
 use postcard::from_bytes;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
@@ -23,7 +24,7 @@ pub struct KeepAlive {
     server_addr: String,
     nodes: Vec<String>,
     keep_alives: Arc<dyn Storage + Send + Sync>,
-    txs: Arc<RwLock<Vec<kanal::AsyncSender<KeepAliveUpdate>>>>,
+    txs: Arc<RwLock<Vec<Arc<kanal::AsyncSender<KeepAliveUpdate>>>>>,
 }
 
 #[async_trait]
@@ -58,7 +59,7 @@ impl KeepAlive {
             let mut txs = self.txs.write().await;
             let kac = Arc::clone(&self.keep_alives);
             let txsc = Arc::clone(&self.txs);
-            txs.push(tx);
+            txs.push(Arc::new(tx));
 
             tokio::spawn(async move {
                 let mut buf = vec![0; 1024];
@@ -260,23 +261,23 @@ impl KeepAliveTrait for KeepAlive {
 
         self.keep_alives.set(id, now).await;
 
-        let txs = self.txs.read().await;
+        // FIXME: not sure it's a good idead to always
+        // lock write, as it's serializes writes to the channels
+        // maybe the disconnected sockets should be
+        // handled elsewhere
+        let mut txs = self.txs.write().await;
 
-        for tx in txs.iter() {
-            let ka = KeepAliveUpdate {
-                id: id.to_string(),
-                ts: now,
-            };
-            match tx.send(ka).await {
-                Ok(_) => {
-                    debug!("Sent to channel")
-                }
-                Err(e) => {
-                    error!("Error sending to channel: {}", e);
-                }
+        let ka = KeepAliveUpdate {
+            id: id.to_string(),
+            ts: now,
+        };
+
+        txs.retain(|sender| {
+            match sender.try_send(ka.clone()) {
+                Ok(_) => true,
+                Err(SendError::Closed) => false,
+                Err(SendError::ReceiveClosed) => true, // handle full case as per your use case
             }
-        }
-
-        //future::join_all(sends).await;
+        });
     }
 }

@@ -1,20 +1,20 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use axum::async_trait;
+use dashmap::{mapref::entry::Entry, DashMap};
 use postcard::to_allocvec;
-use tokio::sync::RwLock;
 
 use anyhow::Result;
 
 use super::Storage;
 pub struct InMemoryStorage {
-    data: Arc<RwLock<HashMap<String, i64>>>,
+    data: DashMap<String, i64>,
 }
 
 impl InMemoryStorage {
     pub fn new() -> Self {
         Self {
-            data: Arc::new(RwLock::new(HashMap::new())),
+            data: DashMap::new(),
         }
     }
 }
@@ -24,49 +24,36 @@ impl Default for InMemoryStorage {
         Self::new()
     }
 }
-
 #[async_trait]
 impl Storage for InMemoryStorage {
     async fn get(&self, id: &str) -> Option<i64> {
-        let data = self.data.read().await;
-        data.get(id).cloned()
+        self.data.get(id).map(|v| *v)
     }
 
     async fn set(&self, id: &str, ts: i64) {
-        let mut data = self.data.write().await;
+        match self.data.entry(id.to_string()) {
+            Entry::Occupied(mut occupied) => {
+                let current = occupied.get();
 
-        match data.get(id) {
-            Some(current) => {
                 if *current < ts {
-                    data.insert(id.to_owned(), ts);
+                    occupied.insert(ts);
                 }
             }
-            None => {
-                data.insert(id.to_owned(), ts);
+            Entry::Vacant(vacant) => {
+                vacant.insert(ts);
             }
-        }
+        };
     }
 
     async fn bulk_set(&self, new_data: HashMap<String, i64>) {
-        let mut data = self.data.write().await;
-
+        // FIXME: unoptimized, but used only on SYNC
         for (id, ts) in new_data {
-            match data.get(&id) {
-                Some(current) => {
-                    if *current < ts {
-                        data.insert(id, ts);
-                    }
-                }
-                None => {
-                    data.insert(id, ts);
-                }
-            }
+            self.set(&id, ts).await;
         }
     }
 
     async fn serialize(&self) -> Result<Vec<u8>> {
-        let data = self.data.read().await;
-        let bin = to_allocvec(&*data)?;
+        let bin = to_allocvec(&self.data)?;
         Ok(bin)
     }
 }

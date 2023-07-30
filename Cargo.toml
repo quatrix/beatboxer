@@ -10,7 +10,7 @@ anyhow = "1.0.72"
 axum = "0.6.19"
 barrage = "0.2.3"
 clap = { version = "4.3.19", features = ["derive"] }
-dashmap = "5.5.0"
+dashmap = { version = "5.5.0", features = ["serde"] }
 futures = "0.3.28"
 kanal = "0.1.0-pre8"
 metrics = "0.21.1"

@@ -258,21 +258,5 @@ impl KeepAliveTrait for KeepAlive {
             .as_millis() as i64;
 
         self.keep_alives.set(id, now).await;
-
-        let ka = KeepAliveUpdate {
-            id: id.to_string(),
-            ts: now,
-        };
-
-        let txs = self.txs.read().await;
-
-        for tx in txs.iter() {
-            let txc = tx.clone();
-            match txc.send(ka.clone()).await {
-                Ok(_) => {}
-                Err(SendError::Closed) => error!("socket closed"),
-                Err(SendError::ReceiveClosed) => error!("receive closed"),
-            }
-        }
     }
 }

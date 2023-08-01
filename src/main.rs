@@ -1,17 +1,17 @@
 use anyhow::Result;
-use std::{future::ready, sync::Arc};
-use tatum::{
+use beatboxer::{
     keep_alive::{KeepAlive, KeepAliveTrait},
     metrics::{setup_metrics_recorder, track_metrics},
     storage::{memory::InMemoryStorage, persistent::PersistentStorage, Storage},
 };
+use std::{future::ready, sync::Arc};
 
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     middleware,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use clap::Parser;
@@ -39,7 +39,7 @@ struct Args {
 fn get_storage(use_rocksdb: bool, http_port: u16) -> Arc<dyn Storage + Sync + Send> {
     if use_rocksdb {
         Arc::new(PersistentStorage::new(&format!(
-            "/tmp/tatum_{}.db",
+            "/tmp/beatboxer_{}.db",
             http_port
         )))
     } else {
@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let recorder_handle = setup_metrics_recorder()?;
 
     let app = Router::new()
-        .route("/pulse/:id", get(pulse_handler))
+        .route("/pulse/:id", post(pulse_handler))
         .route("/ka/:id", get(get_ka_handler))
         .layer(middleware::from_fn(track_metrics))
         .route("/metrics", get(move || ready(recorder_handle.render())))

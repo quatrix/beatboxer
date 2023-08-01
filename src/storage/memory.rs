@@ -24,6 +24,7 @@ impl Default for InMemoryStorage {
         Self::new()
     }
 }
+
 #[async_trait]
 impl Storage for InMemoryStorage {
     async fn get(&self, id: &str) -> Option<i64> {

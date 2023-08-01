@@ -2,7 +2,10 @@ use anyhow::Result;
 use beatboxer::{
     keep_alive::{KeepAlive, KeepAliveTrait},
     metrics::{setup_metrics_recorder, track_metrics},
-    storage::{memory::InMemoryStorage, persistent::PersistentStorage, Storage},
+    storage::{
+        memory::InMemoryStorage, persistent::PersistentStorage, sorted_set::NotifyingStorage,
+        Storage,
+    },
 };
 use std::{future::ready, sync::Arc};
 
@@ -34,10 +37,19 @@ struct Args {
 
     #[arg(short, long)]
     use_rocksdb: bool,
+
+    #[arg(short, long)]
+    notifying_node: bool,
 }
 
-fn get_storage(use_rocksdb: bool, http_port: u16) -> Arc<dyn Storage + Sync + Send> {
-    if use_rocksdb {
+fn get_storage(
+    use_rocksdb: bool,
+    http_port: u16,
+    notfying_node: bool,
+) -> Arc<dyn Storage + Sync + Send> {
+    if notfying_node {
+        Arc::new(NotifyingStorage::new())
+    } else if use_rocksdb {
         Arc::new(PersistentStorage::new(&format!(
             "/tmp/beatboxer_{}.db",
             http_port
@@ -59,7 +71,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let storage = get_storage(args.use_rocksdb, args.http_port);
+    let storage = get_storage(args.use_rocksdb, args.http_port, args.notifying_node);
+    storage.init();
 
     let keep_alive = Arc::new(KeepAlive::new(
         args.ka_sync_addr.clone(),
@@ -72,6 +85,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let recorder_handle = setup_metrics_recorder()?;
 
+    // FIXME: if it's a notifying node, shouldn't
+    // expose the pulse and ka end points.
     let app = Router::new()
         .route("/pulse/:id", post(pulse_handler))
         .route("/ka/:id", get(get_ka_handler))

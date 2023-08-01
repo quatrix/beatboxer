@@ -177,7 +177,7 @@ impl KeepAlive {
 
                                     // FIXME: make pong threshold configurable
                                     if last_pong.elapsed().as_secs() > 3 {
-                                        error!("didn't see pong for a while, node is probably dead, closing socket");
+                                        error!("didn't see pong for a while, node is probably dead, closing socket: {:?}", socket);
                                         break;
                                     }
 

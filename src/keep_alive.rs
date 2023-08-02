@@ -13,10 +13,16 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
     sync::RwLock,
+    time::timeout,
 };
 use tracing::{debug, error, info};
 
 use crate::storage::Storage;
+
+const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_millis(1000);
+const SOCKET_WRITE_LONG_TIMEOUT: Duration = Duration::from_millis(10000);
+const SOCKET_READ_TIMEOUT: Duration = Duration::from_millis(1000);
+const SOCKET_READ_LONG_TIMEOUT: Duration = Duration::from_millis(10000);
 
 #[derive(Clone, Debug)]
 struct KeepAliveUpdate {
@@ -33,7 +39,7 @@ pub struct KeepAlive {
     server_addr: String,
     nodes: Vec<String>,
     keep_alives: Arc<dyn Storage + Send + Sync>,
-    txs: Arc<RwLock<Vec<kanal::AsyncSender<Message>>>>,
+    txs: Arc<RwLock<Vec<(String, kanal::AsyncSender<Message>)>>>,
 }
 
 #[async_trait]
@@ -67,15 +73,24 @@ impl KeepAlive {
                 {
                     let txs = txsc.read().await;
 
-                    for sender in txs.iter() {
-                        if sender.is_closed() {
+                    for (addr, sender) in txs.iter() {
+                        metrics::gauge!("channel_pressure", sender.len() as f64, "addr" => addr.to_string());
+
+                        if sender.is_closed() || sender.is_disconnected() {
                             gc_senders = true;
                         } else {
-                            match sender.send(Message::Ping).await {
-                                Ok(_) => {}
-                                Err(SendError::Closed) => error!("socket closed"),
+                            match sender.try_send(Message::Ping) {
+                                Ok(sent) => {
+                                    if sent {
+                                        metrics::increment_counter!("channel_sends_success_total", "type" => "ping", "addr" => addr.to_string());
+                                    } else {
+                                        error!("failed sending ping to channel, to addr: {}", addr);
+                                        metrics::increment_counter!("channel_sends_errors_total", "type" => "ping", "addr" => addr.to_string());
+                                    }
+                                }
+                                Err(SendError::Closed) => error!("socket closed, addr: {}", addr),
                                 Err(SendError::ReceiveClosed) => {
-                                    error!("receive closed");
+                                    error!("receive closed, addr: {}", addr);
                                     sender.close();
                                 }
                             };
@@ -86,7 +101,7 @@ impl KeepAlive {
                 if gc_senders {
                     info!("cleaninig dead senders");
                     let mut txs = txsc.write().await;
-                    txs.retain(|tx| !tx.is_closed());
+                    txs.retain(|(_, tx)| !tx.is_closed() && !tx.is_disconnected());
                 }
 
                 // FIXME: make keep alive interval configurable
@@ -102,14 +117,14 @@ impl KeepAlive {
         self.health_checker();
 
         loop {
-            let (mut socket, _) = listener.accept().await?;
-            info!("connected client: {:?}", socket);
+            let (mut socket, addr) = listener.accept().await?;
+            info!("connected client: {:?} addr: {}", socket, addr);
 
             let (tx, rx) = kanal::bounded_async(102400);
             let mut txs = self.txs.write().await;
             let kac = Arc::clone(&self.keep_alives);
 
-            txs.push(tx);
+            txs.push((addr.to_string(), tx));
 
             tokio::spawn(async move {
                 let mut buf = vec![0; 1024];
@@ -136,19 +151,20 @@ impl KeepAlive {
                             let ka = kac.serialize().await.unwrap();
                             let ka_len = format!("{}\n", ka.len());
                             info!("Sending SYNC: {}", ka.len());
-                            match socket.write_all(ka_len.as_bytes()).await {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    error!("Error writing to socket: {}", e);
-                                    break;
-                                }
+                            if let Err(e) =
+                                timeout(SOCKET_WRITE_TIMEOUT, socket.write_all(ka_len.as_bytes()))
+                                    .await
+                            {
+                                error!("Error writing SYNC to socket: {}", e);
+                                break;
                             }
-                            match socket.write_all(&ka).await {
+
+                            match timeout(SOCKET_WRITE_LONG_TIMEOUT, socket.write_all(&ka)).await {
                                 Ok(_) => {
                                     already_synched = true;
                                 }
                                 Err(e) => {
-                                    error!("Error writing to socket: {}", e);
+                                    error!("Error writing STATE to socket: {}", e);
                                     break;
                                 }
                             }
@@ -181,12 +197,12 @@ impl KeepAlive {
                                         break;
                                     }
 
-                                    match socket.write_all("PING\n".as_bytes()).await {
+                                    match timeout(SOCKET_WRITE_TIMEOUT, socket.write_all("PING\n".as_bytes())).await {
                                         Ok(_) => {
                                             debug!("Sent to node")
                                         }
                                         Err(e) => {
-                                            error!("Error writing to socket: {}", e);
+                                            error!("Error writing PING to socket: {}", e);
                                             break;
                                         }
                                     }
@@ -194,12 +210,12 @@ impl KeepAlive {
                                 Message::KeepAliveUpdate(ka) => {
                                     let line = format!("KA {} {}\n", ka.id, ka.ts);
                                     debug!("Sending: {}", line);
-                                    match socket.write_all(line.as_bytes()).await {
+                                    match timeout(SOCKET_WRITE_TIMEOUT, socket.write_all(line.as_bytes())).await {
                                         Ok(_) => {
                                             debug!("Sent to node")
                                         }
                                         Err(e) => {
-                                            error!("Error writing to socket: {}", e);
+                                            error!("Error writing KA to socket: {}", e);
                                             break;
                                         }
                                     }
@@ -229,7 +245,7 @@ impl KeepAlive {
                         Ok(socket) => {
                             let mut socket = BufReader::new(socket);
 
-                            let node_ip = match socket.get_ref().peer_addr() {
+                            let addr = match socket.get_ref().peer_addr() {
                                 Ok(ip) => ip,
                                 Err(e) => {
                                     error!("Error getting peer addr: {}", e);
@@ -238,36 +254,46 @@ impl KeepAlive {
                             };
 
                             // send a SYNC command
-                            match socket.write_all(b"SYNC\n").await {
+                            match timeout(SOCKET_WRITE_TIMEOUT, socket.write_all(b"SYNC\n")).await {
                                 Ok(_) => {}
                                 Err(e) => {
-                                    error!("Error writing to socket: {}", e);
+                                    error!("Error writing SYNC to socket: {} (addr: {})", e, addr);
                                     continue;
                                 }
                             }
 
                             let mut buf = String::new();
 
-                            if let Err(e) = socket.read_line(&mut buf).await {
-                                error!("error reading line! {:?}", e);
+                            if let Err(e) =
+                                timeout(SOCKET_READ_TIMEOUT, socket.read_line(&mut buf)).await
+                            {
+                                error!(
+                                    "error reading ka_len line from socket {:?} (addr: {})",
+                                    e, addr
+                                );
                                 continue;
                             }
 
                             let ka_len = match buf.trim().parse::<usize>() {
                                 Ok(ka_len) => ka_len,
                                 Err(e) => {
-                                    error!("Invalid ka_len: {} error: {}", buf, e);
+                                    error!("Invalid ka_len: {} error: {} (addr: {})", buf, e, addr);
                                     continue;
                                 }
                             };
 
                             let mut ka = vec![0; ka_len];
-                            socket.read_exact(&mut ka).await.unwrap();
+                            if let Err(e) =
+                                timeout(SOCKET_READ_LONG_TIMEOUT, socket.read_exact(&mut ka)).await
+                            {
+                                error!("failed getting STATE: {:?} (addr: {})", e, addr);
+                                continue;
+                            }
 
                             let ka = match from_bytes::<HashMap<String, i64>>(&ka) {
                                 Ok(ka) => ka,
                                 Err(e) => {
-                                    error!("Invalid ka: {} error: {}", buf, e);
+                                    error!("Invalid ka: {} error: {} (addr: {})", buf, e, addr);
                                     continue;
                                 }
                             };
@@ -278,7 +304,7 @@ impl KeepAlive {
                                 let mut line = String::new();
 
                                 if let Err(e) = socket.read_line(&mut line).await {
-                                    error!("error while read_line: {:?}", e);
+                                    error!("error while read_line: {:?} (addr: {})", e, addr);
                                     break;
                                 }
 
@@ -295,11 +321,17 @@ impl KeepAlive {
 
                                     match (parts.next(), parts.next()) {
                                         (Some(id), Some(ts)) => {
-                                            debug!("Got KA from another node: {} {}", id, ts);
+                                            debug!(
+                                                "Got KA from another node: {} {} (addr: {})",
+                                                id, ts, addr
+                                            );
                                             let ts = match ts.parse::<i64>() {
                                                 Ok(ts) => ts,
                                                 Err(e) => {
-                                                    error!("Invalid ts '{}' error: {}", ts, e);
+                                                    error!(
+                                                        "Invalid ts '{}' error: {} (addr: {})",
+                                                        ts, e, addr
+                                                    );
                                                     continue;
                                                 }
                                             };
@@ -314,25 +346,30 @@ impl KeepAlive {
                                             metrics::histogram!(
                                                 "message_sync_latency_seconds",
                                                 latency as f64 / 1000.0,
-                                                "node_ip" => format!("{}", node_ip),
+                                                "addr" => addr.to_string(),
                                             );
 
                                             kac.set(id, ts).await;
                                         }
                                         _ => {
-                                            error!("Invalid KA line: {}", line);
+                                            error!("Invalid KA line: {} (addr: {})", line, addr);
                                         }
                                     }
                                 } else if line.starts_with("PING") {
-                                    match socket.write_all("PONG\n".as_bytes()).await {
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            error!("Error writing to socket: {}", e);
-                                            break;
-                                        }
+                                    if let Err(e) = timeout(
+                                        SOCKET_WRITE_TIMEOUT,
+                                        socket.write_all("PONG\n".as_bytes()),
+                                    )
+                                    .await
+                                    {
+                                        error!(
+                                            "Error writing PONG to socket: {} (addr: {})",
+                                            e, addr
+                                        );
+                                        break;
                                     }
                                 } else {
-                                    println!("Got a line: {:?}", line);
+                                    println!("Got a line: {:?} (addr: {})", line, addr);
                                 }
                             }
                         }
@@ -368,12 +405,23 @@ impl KeepAliveTrait for KeepAlive {
 
         let txs = self.txs.read().await;
 
-        for tx in txs.iter().filter(|tx| !tx.is_closed()) {
-            match tx.send(Message::KeepAliveUpdate(ka.clone())).await {
-                Ok(_) => {}
-                Err(SendError::Closed) => error!("socket closed"),
+        for (addr, tx) in txs
+            .iter()
+            .filter(|(_, tx)| !tx.is_closed() && !tx.is_disconnected())
+        {
+            match tx.try_send(Message::KeepAliveUpdate(ka.clone())) {
+                Ok(sent) => {
+                    if sent {
+                        // FIXME: can we know wha node is giving us issues?
+                        metrics::increment_counter!("channel_sends_success_total", "type" => "ka", "addr" => addr.to_string());
+                    } else {
+                        error!("failed sending ping to channel, for addr: {}", addr);
+                        metrics::increment_counter!("channel_sends_errors_total", "type" => "ka", "addr" => addr.to_string());
+                    }
+                }
+                Err(SendError::Closed) => error!("socket closed, addr: {}", addr),
                 Err(SendError::ReceiveClosed) => {
-                    error!("receive closed");
+                    error!("receive closed, addr: {}", addr);
                     tx.close();
                 }
             }

@@ -1,4 +1,5 @@
 ![logo](/images/logo.png)
+
 Distributed heartbeat tracking service in Rust.
 
 ⚠️ This is a work in progress, don't use in production yet ⚠️

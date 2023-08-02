@@ -84,8 +84,14 @@ pub enum NotificationStatus {
 
 #[derive(Debug)]
 pub struct Notification {
-    status: NotificationStatus,
     id: String,
+    status: NotificationStatus,
+}
+
+impl std::fmt::Display for Notification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "id: {}, status: {:?}", self.id, self.status)
+    }
 }
 
 const TIMEOUT_MS: i64 = 20 * 1000;

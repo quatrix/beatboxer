@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             loop {
                 match rxc.recv().await {
-                    Ok(msg) => info!("got notification: {:?}", msg),
+                    Ok(msg) => info!("got notification: {}", msg),
                     Err(e) => error!("error getting notification: {:?}", e),
                 }
             }

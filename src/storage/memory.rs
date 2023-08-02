@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{any::Any, collections::HashMap};
 
 use axum::async_trait;
 use dashmap::{mapref::entry::Entry, DashMap};
@@ -56,5 +56,9 @@ impl Storage for InMemoryStorage {
     async fn serialize(&self) -> Result<Vec<u8>> {
         let bin = to_allocvec(&self.data)?;
         Ok(bin)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

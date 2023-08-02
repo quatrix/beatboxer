@@ -1,10 +1,11 @@
 use anyhow::Result;
 use std::{
+    any::Any,
     collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
     time::Duration,
 };
-use tracing::info;
+use tracing::{error, info};
 
 pub struct ZSet {
     scores: HashMap<String, i64>,
@@ -17,6 +18,10 @@ impl ZSet {
             scores: HashMap::new(),
             elements: BTreeMap::new(),
         }
+    }
+
+    pub fn get(&self, value: &str) -> Option<&i64> {
+        self.scores.get(value)
     }
 
     pub fn update(&mut self, value: &str, score: i64) {
@@ -67,27 +72,48 @@ use super::Storage;
 
 pub struct NotifyingStorage {
     data: Arc<RwLock<ZSet>>,
+    tx: Arc<kanal::AsyncSender<Notification>>,
+    rx: Arc<kanal::AsyncReceiver<Notification>>,
+}
+
+#[derive(Debug)]
+pub enum NotificationStatus {
+    Connected,
+    Dead,
+}
+
+#[derive(Debug)]
+pub struct Notification {
+    status: NotificationStatus,
+    id: String,
+}
+
+const TIMEOUT_MS: i64 = 20 * 1000;
+
+fn timed_out(ts: i64) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+
+    ts < now - TIMEOUT_MS
 }
 
 impl NotifyingStorage {
     pub fn new() -> Self {
+        let (tx, rx) = kanal::bounded_async(102400);
+
         Self {
             data: Arc::new(RwLock::new(ZSet::new())),
+            tx: Arc::new(tx),
+            rx: Arc::new(rx),
         }
     }
-}
 
-impl Default for NotifyingStorage {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl Storage for NotifyingStorage {
-    fn init(&self) {
+    pub fn subscribe(&self) -> Arc<kanal::AsyncReceiver<Notification>> {
         info!("starting notifier");
         let data_c = Arc::clone(&self.data);
+        let tx_c = Arc::clone(&self.tx);
 
         tokio::spawn(async move {
             let mut oldest_ts = std::time::SystemTime::now()
@@ -104,11 +130,20 @@ impl Storage for NotifyingStorage {
                         .unwrap()
                         .as_millis() as i64;
 
-                    let dead_ids = data.range(oldest_ts, now - 20000);
+                    let dead_ids = data.range(oldest_ts, now - TIMEOUT_MS);
 
                     for (id, ts) in dead_ids {
                         if ts > oldest_ts {
-                            info!("dead id: {:?}", id);
+                            if let Err(e) = tx_c
+                                .send(Notification {
+                                    id: id.to_string(),
+                                    status: NotificationStatus::Dead,
+                                })
+                                .await
+                            {
+                                error!("error while sending notification: {:?}", e);
+                                return;
+                            }
                             oldest_ts = ts;
                         }
                     }
@@ -117,14 +152,51 @@ impl Storage for NotifyingStorage {
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         });
+
+        Arc::clone(&self.rx)
     }
 
-    async fn get(&self, id: &str) -> Option<i64> {
-        None
+    async fn notify(&self, id: &str, status: NotificationStatus) {
+        // FIXME: 1. remove duplication between here and the notifier thread
+        // 2. handle errors better
+        if let Err(e) = self
+            .tx
+            .send(Notification {
+                id: id.to_string(),
+                status,
+            })
+            .await
+        {
+            error!("error while notifying: {:?}", e);
+        }
+    }
+}
+
+impl Default for NotifyingStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Storage for NotifyingStorage {
+    async fn get(&self, _id: &str) -> Option<i64> {
+        todo!("not supported");
     }
 
     async fn set(&self, id: &str, ts: i64) {
         let mut data = self.data.write().await;
+
+        match data.get(id) {
+            None => {
+                self.notify(id, NotificationStatus::Connected).await;
+            }
+            Some(ts) if timed_out(*ts) => {
+                self.notify(id, NotificationStatus::Connected).await;
+            }
+            _ => {}
+        }
+
         data.update(id, ts);
     }
 
@@ -139,6 +211,10 @@ impl Storage for NotifyingStorage {
 
     async fn serialize(&self) -> Result<Vec<u8>> {
         todo!("shouldn't be called");
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

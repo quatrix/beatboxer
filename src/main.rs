@@ -18,7 +18,7 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser, Debug)]
@@ -72,7 +72,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let storage = get_storage(args.use_rocksdb, args.http_port, args.notifying_node);
-    storage.init();
+
+    if args.notifying_node {
+        let notifying_storage: &NotifyingStorage =
+            match storage.as_any().downcast_ref::<NotifyingStorage>() {
+                Some(b) => b,
+                None => panic!("&a isn't a B!"),
+            };
+
+        let rx = notifying_storage.subscribe();
+        let rxc = Arc::clone(&rx);
+
+        tokio::spawn(async move {
+            loop {
+                match rxc.recv().await {
+                    Ok(msg) => info!("got notification: {:?}", msg),
+                    Err(e) => error!("error getting notification: {:?}", e),
+                }
+            }
+        });
+    }
 
     let keep_alive = Arc::new(KeepAlive::new(
         args.ka_sync_addr.clone(),

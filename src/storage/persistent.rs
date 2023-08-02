@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use axum::async_trait;
 use postcard::to_allocvec;
@@ -58,5 +58,9 @@ impl Storage for PersistentStorage {
         }
         let bin = to_allocvec(&h)?;
         Ok(bin)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

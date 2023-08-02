@@ -146,4 +146,3 @@ Each node exports a prometheus endpoint `/metrics` with HTTP times and messages 
 1. Getting peers from `etcd` / `consul`
 1. Add `/ready` readiness probe, to make the node *ready* only after it done the `SYNC`
 1. Add another storage mode using `skip-lists` / `sorted-set`, storing the heartbeats sorted by time allows polling efficiently for devices that haven't sent a heartbeat in a while, and to output an event when a device is `DEAD` or `CONNECTED` when it starts sending heartbeats again.
-1. Handle when downstream nodes are too slow and channels are full, it shouldn't make the handler hang, maybe best to disconnect the node in this case.

@@ -209,7 +209,7 @@ impl KeepAlive {
                                 }
                                 Message::KeepAliveUpdate(ka) => {
                                     let line = format!("KA {} {}\n", ka.id, ka.ts);
-                                    debug!("Sending: {}", line);
+                                    debug!("Sending: {} - to addr {}", line, addr);
                                     match timeout(SOCKET_WRITE_TIMEOUT, socket.write_all(line.as_bytes())).await {
                                         Ok(_) => {
                                             debug!("Sent to node")
@@ -409,6 +409,7 @@ impl KeepAliveTrait for KeepAlive {
             .iter()
             .filter(|(_, tx)| !tx.is_closed() && !tx.is_disconnected())
         {
+            debug!("sending KA update to channel {} -> {:?}", addr, ka);
             match tx.try_send(Message::KeepAliveUpdate(ka.clone())) {
                 Ok(sent) => {
                     if sent {

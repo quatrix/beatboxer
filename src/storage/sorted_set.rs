@@ -1,11 +1,18 @@
 use anyhow::Result;
+use axum::async_trait;
 use std::{
     any::Any,
     collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
     time::Duration,
 };
+use tokio::sync::{
+    mpsc::{self, Receiver, Sender},
+    RwLock,
+};
 use tracing::{error, info};
+
+use super::Storage;
 
 pub struct ZSet {
     scores: HashMap<String, i64>,
@@ -65,15 +72,10 @@ impl Default for ZSet {
     }
 }
 
-use axum::async_trait;
-use tokio::sync::RwLock;
-
-use super::Storage;
-
 pub struct NotifyingStorage {
     data: Arc<RwLock<ZSet>>,
-    tx: Arc<kanal::AsyncSender<Notification>>,
-    rx: Arc<kanal::AsyncReceiver<Notification>>,
+    tx: Arc<Sender<Notification>>,
+    rx: Arc<RwLock<Receiver<Notification>>>,
 }
 
 #[derive(Debug)]
@@ -107,16 +109,16 @@ fn timed_out(ts: i64) -> bool {
 
 impl NotifyingStorage {
     pub fn new() -> Self {
-        let (tx, rx) = kanal::bounded_async(102400);
+        let (tx, rx) = mpsc::channel(102400);
 
         Self {
             data: Arc::new(RwLock::new(ZSet::new())),
             tx: Arc::new(tx),
-            rx: Arc::new(rx),
+            rx: Arc::new(RwLock::new(rx)),
         }
     }
 
-    pub fn subscribe(&self) -> Arc<kanal::AsyncReceiver<Notification>> {
+    pub fn subscribe(&self) -> Arc<RwLock<Receiver<Notification>>> {
         info!("starting notifier");
         let data_c = Arc::clone(&self.data);
         let tx_c = Arc::clone(&self.tx);

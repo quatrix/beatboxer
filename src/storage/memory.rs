@@ -5,6 +5,7 @@ use dashmap::{mapref::entry::Entry, DashMap};
 use postcard::to_allocvec;
 
 use anyhow::Result;
+use tracing::info;
 
 use super::Storage;
 pub struct InMemoryStorage {
@@ -54,7 +55,9 @@ impl Storage for InMemoryStorage {
     }
 
     async fn serialize(&self) -> Result<Vec<u8>> {
+        let t0 = std::time::Instant::now();
         let bin = to_allocvec(&self.data)?;
+        info!("serialized state in {} seconds", t0.elapsed().as_secs_f32());
         Ok(bin)
     }
 

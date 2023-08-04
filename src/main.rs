@@ -80,14 +80,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => panic!("&a isn't a B!"),
             };
 
-        let rx = notifying_storage.subscribe();
-        let rxc = Arc::clone(&rx);
+        let rxc = notifying_storage.subscribe();
 
         tokio::spawn(async move {
+            let mut rxc = rxc.write().await;
             loop {
                 match rxc.recv().await {
-                    Ok(msg) => info!("got notification: {}", msg),
-                    Err(e) => error!("error getting notification: {:?}", e),
+                    Some(msg) => info!("got notification: {}", msg),
+                    None => {
+                        error!("error getting notification");
+                        break;
+                    }
                 }
             }
         });

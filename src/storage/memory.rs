@@ -69,3 +69,24 @@ impl Storage for InMemoryStorage {
         self
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::InMemoryStorage;
+    use crate::storage::Storage;
+
+    #[tokio::test]
+    async fn test_inserting_stores_only_newer_timestamps() {
+        let storage = InMemoryStorage::new();
+        storage.set("hey", 10).await;
+        assert_eq!(storage.get("hey").await.unwrap(), 10);
+
+        // 5 is older than 10, so should keep 10
+        storage.set("hey", 5).await;
+        assert_eq!(storage.get("hey").await.unwrap(), 10);
+
+        // 15 is newer, so it should get set
+        storage.set("hey", 15).await;
+        assert_eq!(storage.get("hey").await.unwrap(), 15);
+    }
+}

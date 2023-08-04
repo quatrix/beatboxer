@@ -12,6 +12,11 @@ use tokio::sync::{
 };
 use tracing::{error, info};
 
+use crate::keep_alive::{
+    constants::DEAD_DEVICE_TIMEOUT,
+    types::{Notification, NotificationStatus},
+};
+
 use super::Storage;
 
 pub struct ZSet {
@@ -78,33 +83,14 @@ pub struct NotifyingStorage {
     rx: Arc<RwLock<Receiver<Notification>>>,
 }
 
-#[derive(Debug)]
-pub enum NotificationStatus {
-    Connected,
-    Dead,
-}
-
-#[derive(Debug)]
-pub struct Notification {
-    id: String,
-    status: NotificationStatus,
-}
-
-impl std::fmt::Display for Notification {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "id: {}, status: {:?}", self.id, self.status)
-    }
-}
-
-const TIMEOUT_MS: i64 = 20 * 1000;
-
 fn timed_out(ts: i64) -> bool {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
 
-    ts < now - TIMEOUT_MS
+    // FIXME: refactor this, can just use duration without converting to secs
+    ts < (now - DEAD_DEVICE_TIMEOUT.as_millis() as i64)
 }
 
 impl NotifyingStorage {
@@ -138,7 +124,8 @@ impl NotifyingStorage {
                         .unwrap()
                         .as_millis() as i64;
 
-                    let dead_ids = data.range(oldest_ts, now - TIMEOUT_MS);
+                    let dead_ids =
+                        data.range(oldest_ts, now - DEAD_DEVICE_TIMEOUT.as_millis() as i64);
 
                     for (id, ts) in dead_ids {
                         if ts > oldest_ts {

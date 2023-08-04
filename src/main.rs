@@ -114,6 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/ka/:id", get(get_ka_handler))
         .layer(middleware::from_fn(track_metrics))
         .route("/metrics", get(move || ready(recorder_handle.render())))
+        .route("/ping", get(ping_handler))
         .with_state(cloned_keep_alive);
 
     let addr = format!("{}:{}", args.http_host, args.http_port)
@@ -130,6 +131,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     Ok(())
+}
+
+async fn ping_handler() -> &'static str {
+    "PONG"
 }
 
 async fn pulse_handler(

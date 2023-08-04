@@ -57,7 +57,11 @@ impl Storage for InMemoryStorage {
     async fn serialize(&self) -> Result<Vec<u8>> {
         let t0 = std::time::Instant::now();
         let bin = to_allocvec(&self.data)?;
-        info!("serialized state in {} seconds", t0.elapsed().as_secs_f32());
+        info!(
+            "Serialized state in {:.2} secs ({} keys)",
+            t0.elapsed().as_secs_f32(),
+            self.data.len()
+        );
         Ok(bin)
     }
 

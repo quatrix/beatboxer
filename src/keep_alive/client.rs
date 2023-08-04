@@ -14,30 +14,22 @@ use tracing::{debug, error, info};
 
 impl KeepAlive {
     pub fn connect_to_nodes(&self) {
-        for node in self.nodes.clone() {
+        for addr in self.nodes.clone() {
             let kac = Arc::clone(&self.keep_alives);
             tokio::spawn(async move {
                 loop {
-                    info!("Connecting to {}", node);
+                    info!("Connecting to {}", addr);
 
-                    match TcpStream::connect(&node).await {
+                    match TcpStream::connect(&addr).await {
                         Ok(socket) => {
                             let mut socket = BufReader::new(socket);
 
-                            let addr = match socket.get_ref().peer_addr() {
-                                Ok(ip) => ip,
-                                Err(e) => {
-                                    error!("Error getting peer addr: {}", e);
-                                    continue;
-                                }
-                            };
-
                             // send a SYNC command
-                            info!("sending SYNC to {}", node);
+                            info!("[{}] Sending SYNC reques", addr);
                             match timeout(SOCKET_WRITE_TIMEOUT, socket.write_all(b"SYNC\n")).await {
                                 Ok(_) => {}
                                 Err(e) => {
-                                    error!("Error writing SYNC to socket: {} (addr: {})", e, addr);
+                                    error!("[{}] Error sending SYNC request: {:?}", addr, e);
                                     continue;
                                 }
                             }
@@ -47,17 +39,14 @@ impl KeepAlive {
                             if let Err(e) =
                                 timeout(SOCKET_READ_LONG_TIMEOUT, socket.read_line(&mut buf)).await
                             {
-                                error!(
-                                    "error reading ka_len line from socket {:?} (addr: {})",
-                                    e, addr
-                                );
+                                error!("[{}] Error reading ka_len line from socket {:?}", addr, e);
                                 continue;
                             }
 
                             let ka_len = match buf.trim().parse::<usize>() {
                                 Ok(ka_len) => ka_len,
                                 Err(e) => {
-                                    error!("Invalid ka_len: {} error: {} (addr: {})", buf, e, addr);
+                                    error!("[{}] Invalid ka_len: {} error: {}", addr, buf, e);
                                     continue;
                                 }
                             };
@@ -65,18 +54,18 @@ impl KeepAlive {
                             let mut ka = vec![0; ka_len];
 
                             let t0 = std::time::Instant::now();
-                            info!("getting state from {}... (size: {})", node, ka_len);
+                            info!("[{}] Getting state... (size: {})", addr, ka_len);
 
                             if let Err(e) =
                                 timeout(SOCKET_READ_LONG_TIMEOUT, socket.read_exact(&mut ka)).await
                             {
-                                error!("failed getting STATE: {:?} (addr: {})", e, addr);
+                                error!("[{}] Failed getting STATE: {:?}", addr, e);
                                 continue;
                             }
 
                             info!(
-                                "got state from {}. (size: {}) took: {}",
-                                node,
+                                "[{}] Got state from. (size: {}) took: {:.2} secs",
+                                addr,
                                 ka_len,
                                 t0.elapsed().as_secs_f32()
                             );
@@ -85,14 +74,15 @@ impl KeepAlive {
                             let ka = match from_bytes::<HashMap<String, i64>>(&ka) {
                                 Ok(ka) => ka,
                                 Err(e) => {
-                                    error!("Invalid ka: {} error: {} (addr: {})", buf, e, addr);
+                                    error!("[{}] Invalid ka: {} error: {}", addr, buf, e);
                                     continue;
                                 }
                             };
 
                             info!(
-                                "deserializing state from {}. took: {}",
-                                node,
+                                "[{}] Deserializing state took: {:.2} secs ({} keys)",
+                                addr,
+                                ka.keys().len(),
                                 t0.elapsed().as_secs_f32()
                             );
 
@@ -100,18 +90,18 @@ impl KeepAlive {
                             kac.bulk_set(ka).await;
 
                             info!(
-                                "storing state from {}. took: {}",
-                                node,
+                                "[{}] Storing state took: {:.2} secs",
+                                addr,
                                 t0.elapsed().as_secs_f32()
                             );
 
-                            info!("ready. listening on updates from {}...", node);
+                            info!("[{}] Synched. listening on updates...", addr);
 
                             loop {
                                 let mut line = String::new();
 
                                 if let Err(e) = socket.read_line(&mut line).await {
-                                    error!("error while read_line: {:?} (addr: {})", e, addr);
+                                    error!("[{}] Error while read_line: {:?}", addr, e);
                                     break;
                                 }
 
@@ -128,16 +118,13 @@ impl KeepAlive {
 
                                     match (parts.next(), parts.next()) {
                                         (Some(id), Some(ts)) => {
-                                            debug!(
-                                                "Got KA from another node: {} {} (addr: {})",
-                                                id, ts, addr
-                                            );
+                                            debug!("[{}] Got KA {} -> {}", addr, id, ts);
                                             let ts = match ts.parse::<i64>() {
                                                 Ok(ts) => ts,
                                                 Err(e) => {
                                                     error!(
-                                                        "Invalid ts '{}' error: {} (addr: {})",
-                                                        ts, e, addr
+                                                        "[{}] Invalid ts '{}' error: {}",
+                                                        addr, ts, e
                                                     );
                                                     continue;
                                                 }
@@ -159,7 +146,7 @@ impl KeepAlive {
                                             kac.set(id, ts).await;
                                         }
                                         _ => {
-                                            error!("Invalid KA line: {} (addr: {})", line, addr);
+                                            error!("[{}] Invalid KA line: {}", addr, line);
                                         }
                                     }
                                 } else if line.starts_with("PING") {
@@ -169,19 +156,16 @@ impl KeepAlive {
                                     )
                                     .await
                                     {
-                                        error!(
-                                            "Error writing PONG to socket: {} (addr: {})",
-                                            e, addr
-                                        );
+                                        error!("[{}] Error writing PONG to socket: {}", addr, e);
                                         break;
                                     }
                                 } else {
-                                    println!("Got a line: {:?} (addr: {})", line, addr);
+                                    error!("[{}] Got unexpected command: {})", addr, line);
                                 }
                             }
                         }
                         Err(e) => {
-                            error!("Error connecting to {}: {}", node, e);
+                            error!("[{}] Error connecting: {}, trying again...", addr, e);
                             tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                     }

@@ -2,6 +2,7 @@
 pub struct KeepAliveUpdate {
     pub id: String,
     pub ts: i64,
+    pub is_connection_event: bool,
 }
 
 pub enum Message {
@@ -9,20 +10,15 @@ pub enum Message {
     KeepAliveUpdate(KeepAliveUpdate),
 }
 
-#[derive(Debug)]
-pub enum NotificationStatus {
+#[derive(Clone, Debug, PartialEq)]
+pub enum EventType {
     Connected,
     Dead,
 }
 
-#[derive(Debug)]
-pub struct Notification {
+#[derive(Clone, Debug, PartialEq)]
+pub struct Event {
+    pub ts: i64,
     pub id: String,
-    pub status: NotificationStatus,
-}
-
-impl std::fmt::Display for Notification {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "id: {}, status: {:?}", self.id, self.status)
-    }
+    pub typ: EventType,
 }

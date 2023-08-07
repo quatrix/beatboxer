@@ -116,8 +116,8 @@ impl KeepAlive {
                                     // the KA part
                                     parts.next();
 
-                                    match (parts.next(), parts.next()) {
-                                        (Some(id), Some(ts)) => {
+                                    match (parts.next(), parts.next(), parts.next()) {
+                                        (Some(id), Some(ts), Some(ce)) => {
                                             debug!("[{}] Got KA {} -> {}", addr, id, ts);
                                             let ts = match ts.parse::<i64>() {
                                                 Ok(ts) => ts,
@@ -126,6 +126,17 @@ impl KeepAlive {
                                                         "[{}] Invalid ts '{}' error: {}",
                                                         addr, ts, e
                                                     );
+                                                    continue;
+                                                }
+                                            };
+
+                                            let is_connection_event = match ce.parse::<u8>() {
+                                                Ok(ce) => ce == 1,
+                                                Err(e) => {
+                                                    error!(
+                                                            "[{}] Invalid connection_event '{}' error: {}",
+                                                            addr, ts, e
+                                                        );
                                                     continue;
                                                 }
                                             };
@@ -143,7 +154,7 @@ impl KeepAlive {
                                                 "addr" => addr.to_string(),
                                             );
 
-                                            kac.set(id, ts).await;
+                                            kac.set(id, ts, is_connection_event).await;
                                         }
                                         _ => {
                                             error!("[{}] Invalid KA line: {}", addr, line);

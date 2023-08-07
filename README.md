@@ -45,6 +45,12 @@ The above constains and assumptions make the problem of a distribution system ea
 
 # How?
 
+### High Level Design
+* Multi leader cluster - all nodes are masters and accept pulses
+* The node taking the pulse generates the timestamp and sends to all other nodes
+* All nodes are connected to all other nodes
+* Since the values are timestamp, in case of conflicts last write wins. (highest timestamp)
+
 ### Update Flow
 ```mermaid 
 sequenceDiagram

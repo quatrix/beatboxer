@@ -4,7 +4,7 @@ pub mod server;
 pub mod types;
 
 use std::{sync::Arc, time::Duration};
-use tokio::sync::mpsc::{error::TrySendError, Sender};
+use tokio::sync::mpsc::{error::TrySendError, Receiver, Sender};
 
 use axum::async_trait;
 
@@ -13,19 +13,25 @@ use tracing::{debug, error, info};
 
 use crate::storage::Storage;
 
-use self::types::{KeepAliveUpdate, Message};
+use self::{
+    constants::DEAD_DEVICE_TIMEOUT,
+    types::{Event, KeepAliveUpdate, Message},
+};
+
+type SenderChannels = Arc<RwLock<Vec<(String, Sender<Message>)>>>;
 
 pub struct KeepAlive {
     server_addr: String,
     nodes: Vec<String>,
     keep_alives: Arc<dyn Storage + Send + Sync>,
-    txs: Arc<RwLock<Vec<(String, Sender<Message>)>>>,
+    txs: SenderChannels,
 }
 
 #[async_trait]
 pub trait KeepAliveTrait {
     async fn pulse(&self, id: &str);
     async fn get(&self, id: &str) -> Option<i64>;
+    async fn subscribe(&self, offset: Option<i64>) -> Option<Receiver<Event>>;
 }
 
 impl KeepAlive {
@@ -59,11 +65,11 @@ impl KeepAlive {
                         match sender.try_send(Message::Ping) {
                             Ok(_) => {}
                             Err(TrySendError::Closed(_)) => {
-                                error!("channel closed, addr: {}", addr);
+                                error!("[{}] (ping) Channel closed.", addr);
                                 gc_senders = true;
                             }
                             Err(TrySendError::Full(_)) => {
-                                error!("channel full, addr: {}", addr);
+                                error!("[{}] (ping) Channel full.", addr);
                             }
                         };
                     }
@@ -94,11 +100,17 @@ impl KeepAliveTrait for KeepAlive {
             .unwrap()
             .as_millis() as i64;
 
-        self.keep_alives.set(id, now).await;
+        let is_connection_event = match self.keep_alives.get(id).await {
+            None => true,
+            Some(ts) => now - ts > (DEAD_DEVICE_TIMEOUT.as_millis() as i64),
+        };
+
+        self.keep_alives.set(id, now, is_connection_event).await;
 
         let ka = KeepAliveUpdate {
             id: id.to_string(),
             ts: now,
+            is_connection_event,
         };
 
         let txs = self.txs.read().await;
@@ -107,9 +119,13 @@ impl KeepAliveTrait for KeepAlive {
             debug!("sending KA update to channel {} -> {:?}", addr, ka);
             match tx.try_send(Message::KeepAliveUpdate(ka.clone())) {
                 Ok(_) => {}
-                Err(TrySendError::Closed(_)) => error!("channel closed, addr: {}", addr),
-                Err(TrySendError::Full(_)) => error!("channel full, addr: {}", addr),
+                Err(TrySendError::Closed(_)) => error!("[{}] (KA) Channel closed.", addr),
+                Err(TrySendError::Full(_)) => error!("[{}] (KA) Channel full.", addr),
             }
         }
+    }
+
+    async fn subscribe(&self, offset: Option<i64>) -> Option<Receiver<Event>> {
+        self.keep_alives.subscribe(offset).await
     }
 }

@@ -1,4 +1,4 @@
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use axum::async_trait;
 use postcard::to_allocvec;
@@ -16,6 +16,19 @@ impl PersistentStorage {
         let db = DB::open_default(filename).unwrap();
         Self { db: Arc::new(db) }
     }
+
+    async fn set_ts(&self, id: &str, ts: i64) {
+        match self.get(id).await {
+            Some(current) => {
+                if current < ts {
+                    self.db.put(id, ts.to_be_bytes()).unwrap();
+                }
+            }
+            None => {
+                self.db.put(id, ts.to_be_bytes()).unwrap();
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -28,22 +41,13 @@ impl Storage for PersistentStorage {
         }
     }
 
-    async fn set(&self, id: &str, ts: i64) {
-        match self.get(id).await {
-            Some(current) => {
-                if current < ts {
-                    self.db.put(id, ts.to_be_bytes()).unwrap();
-                }
-            }
-            None => {
-                self.db.put(id, ts.to_be_bytes()).unwrap();
-            }
-        }
+    async fn set(&self, id: &str, ts: i64, _is_connection_event: bool) {
+        self.set_ts(id, ts).await;
     }
 
     async fn bulk_set(&self, new_data: HashMap<String, i64>) {
         for (id, ts) in new_data {
-            self.set(&id, ts).await;
+            self.set_ts(&id, ts).await;
         }
     }
 
@@ -58,9 +62,5 @@ impl Storage for PersistentStorage {
         }
         let bin = to_allocvec(&h)?;
         Ok(bin)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

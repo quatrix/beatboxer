@@ -1,16 +1,15 @@
 use anyhow::Result;
 use beatboxer::{
-    keep_alive::{KeepAlive, KeepAliveTrait},
+    keep_alive::{types::Event, KeepAlive, KeepAliveTrait},
     metrics::{setup_metrics_recorder, track_metrics},
-    storage::{
-        memory::InMemoryStorage, persistent::PersistentStorage, sorted_set::NotifyingStorage,
-        Storage,
-    },
+    storage::{memory::InMemoryStorage, persistent::PersistentStorage, Storage},
 };
+use serde::Deserialize;
 use std::{future::ready, sync::Arc};
+use tokio::sync::mpsc::Receiver;
 
 use axum::{
-    extract::{Path, State},
+    extract::{ws::WebSocket, Path, Query, State, WebSocketUpgrade},
     http::StatusCode,
     middleware,
     response::IntoResponse,
@@ -37,25 +36,16 @@ struct Args {
 
     #[arg(short, long)]
     use_rocksdb: bool,
-
-    #[arg(short, long)]
-    notifying_node: bool,
 }
 
-fn get_storage(
-    use_rocksdb: bool,
-    http_port: u16,
-    notfying_node: bool,
-) -> Arc<dyn Storage + Sync + Send> {
-    if notfying_node {
-        Arc::new(NotifyingStorage::new())
-    } else if use_rocksdb {
+fn get_storage(use_rocksdb: bool, http_port: u16) -> Arc<dyn Storage + Sync + Send> {
+    if use_rocksdb {
         Arc::new(PersistentStorage::new(&format!(
             "/tmp/beatboxer_{}.db",
             http_port
         )))
     } else {
-        Arc::new(InMemoryStorage::new())
+        Arc::new(InMemoryStorage::default())
     }
 }
 
@@ -71,30 +61,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let storage = get_storage(args.use_rocksdb, args.http_port, args.notifying_node);
+    let storage = get_storage(args.use_rocksdb, args.http_port);
 
-    if args.notifying_node {
-        let notifying_storage: &NotifyingStorage =
-            match storage.as_any().downcast_ref::<NotifyingStorage>() {
-                Some(b) => b,
-                None => panic!("&a isn't a B!"),
-            };
-
-        let rxc = notifying_storage.subscribe();
-
-        tokio::spawn(async move {
-            let mut rxc = rxc.write().await;
-            loop {
-                match rxc.recv().await {
-                    Some(msg) => info!("got notification: {}", msg),
-                    None => {
-                        error!("error getting notification");
-                        break;
-                    }
-                }
-            }
-        });
-    }
+    storage.watch_for_updates();
 
     let keep_alive = Arc::new(KeepAlive::new(
         args.ka_sync_addr.clone(),
@@ -104,7 +73,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     keep_alive.connect_to_nodes();
 
     let cloned_keep_alive = Arc::clone(&keep_alive);
-
     let recorder_handle = setup_metrics_recorder()?;
 
     // FIXME: if it's a notifying node, shouldn't
@@ -113,6 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/pulse/:id", post(pulse_handler))
         .route("/ka/:id", get(get_ka_handler))
         .layer(middleware::from_fn(track_metrics))
+        .route("/updates", get(ws_handler))
         .route("/metrics", get(move || ready(recorder_handle.render())))
         .route("/ping", get(ping_handler))
         .with_state(cloned_keep_alive);
@@ -152,5 +121,37 @@ async fn get_ka_handler(
     match keep_alive.get(&id).await {
         Some(ts) => (StatusCode::OK, ts.to_string()),
         None => (StatusCode::NOT_FOUND, "Not found".to_string()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WsParams {
+    offset: Option<i64>,
+}
+
+async fn ws_handler(
+    State(keep_alive): State<Arc<dyn KeepAliveTrait + Send + Sync>>,
+    Query(params): Query<WsParams>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    if let Some(rx) = keep_alive.subscribe(params.offset).await {
+        ws.on_upgrade(move |socket| handle_socket(socket, rx))
+    } else {
+        panic!("can't get rx for updates")
+    }
+}
+
+async fn handle_socket(mut socket: WebSocket, mut rx: Receiver<Event>) {
+    loop {
+        if let Some(event) = rx.recv().await {
+            let msg = axum::extract::ws::Message::Text(format!(
+                "{} - {} - {:?}",
+                event.ts, event.id, event.typ,
+            ));
+
+            if let Err(e) = socket.send(msg).await {
+                error!("error sending ws message: {:?}", e);
+            }
+        }
     }
 }

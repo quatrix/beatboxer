@@ -132,7 +132,7 @@ impl KeepAlive {
                                     }
                                 }
                                 Message::KeepAliveUpdate(ka) => {
-                                    let line = format!("KA {} {}\n", ka.id, ka.ts);
+                                    let line = format!("KA {} {} {}\n", ka.id, ka.ts, ka.is_connection_event as u8);
                                     debug!("[{}] Sending KA '{}'", addr, line);
                                     match timeout(SOCKET_WRITE_TIMEOUT, socket.write_all(line.as_bytes())).await {
                                         Ok(_) => {

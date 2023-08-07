@@ -1,8 +1,11 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{collections::HashSet, sync::RwLock};
+
+use crossbeam_skiplist::SkipMap;
+use dashmap::DashMap;
 
 pub struct ZSet {
-    pub scores: HashMap<String, i64>,
-    elements: BTreeMap<i64, HashSet<String>>,
+    pub scores: DashMap<String, i64>,
+    elements: SkipMap<i64, RwLock<HashSet<String>>>,
 }
 
 impl Default for ZSet {
@@ -14,44 +17,62 @@ impl Default for ZSet {
 impl ZSet {
     pub fn new() -> Self {
         ZSet {
-            scores: HashMap::new(),
-            elements: BTreeMap::new(),
+            scores: DashMap::new(),
+            elements: SkipMap::new(),
         }
     }
 
-    pub fn get(&self, value: &str) -> Option<&i64> {
-        self.scores.get(value)
+    pub fn get(&self, value: &str) -> Option<i64> {
+        self.scores.get(value).map(|v| *v)
     }
 
-    pub fn update(&mut self, value: &str, score: i64) {
-        if let Some(old_score) = self.scores.get(value) {
-            if old_score > &score {
-                return;
-            }
+    pub fn update(&self, value: &str, score: i64) {
+        match self.scores.entry(value.to_string()) {
+            dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
+                // if there's a score already, get it
+                let old_score = occupied.get();
 
-            if let Some(set) = self.elements.get_mut(old_score) {
-                set.remove(value);
-                if set.is_empty() {
-                    self.elements.remove(old_score);
+                if old_score > &score {
+                    // if current score is older than prev score, ignore it, it's a laggy event
+                    return;
                 }
+
+                // get the set based on the old score
+                if let Some(set) = self.elements.get(old_score) {
+                    // remove the old value from the set, and if the set is empty remove the whole
+                    // set.
+                    let mut set_l = set.value().write().expect("couldn't get a lock");
+                    set_l.remove(value);
+                    if set_l.is_empty() {
+                        self.elements.remove(old_score);
+                    }
+                }
+                occupied.insert(score);
             }
-        }
+            dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                vacant.insert(score);
+            }
+        };
 
-        // Insert the new score for the element in the scores map
-        self.scores.insert(value.to_string(), score);
+        let entry = self
+            .elements
+            .get_or_insert(score, RwLock::new(HashSet::new()));
 
-        // Add the element to the new score set
-        self.elements.entry(score).or_insert_with(HashSet::new);
-        if let Some(set) = self.elements.get_mut(&score) {
-            set.insert(value.to_string());
-        }
+        let mut set_l = entry.value().write().expect("couldn't get lock");
+        set_l.insert(value.to_string());
     }
 
-    pub fn range(&self, start: i64, end: i64) -> Vec<(&String, i64)> {
+    pub fn range(&self, start: i64, end: i64) -> Vec<(String, i64)> {
         let mut res = vec![];
-        for (&score, set) in self.elements.range(start..=end) {
-            for element in set {
-                res.push((element, score));
+
+        let set_range = self.elements.range(start..=end);
+
+        for entry in set_range.into_iter() {
+            let score = *entry.key();
+            let set_l = &*entry.value().read().expect("can't get read lock");
+
+            for element in set_l {
+                res.push((element.to_string(), score));
             }
         }
         res
@@ -64,7 +85,7 @@ mod test {
 
     #[test]
     fn basics() {
-        let mut zset = ZSet::new();
+        let zset = ZSet::new();
 
         zset.update("hey", 10);
         zset.update("ho", 20);
@@ -73,17 +94,17 @@ mod test {
 
         assert_eq!(
             zset.range(30, 50),
-            vec![(&"lets".to_string(), 30), (&"go".to_string(), 40)]
+            vec![("lets".to_string(), 30), ("go".to_string(), 40)]
         );
     }
 
     #[test]
     fn should_only_update_if_score_is_higher() {
-        let mut zset = ZSet::new();
+        let zset = ZSet::new();
 
         zset.update("hey", 20);
         zset.update("hey", 10);
 
-        assert_eq!(zset.range(0, 50), vec![(&"hey".to_string(), 20)]);
+        assert_eq!(zset.range(0, 50), vec![("hey".to_string(), 20)]);
     }
 }

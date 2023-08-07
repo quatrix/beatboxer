@@ -21,7 +21,7 @@ use tokio::sync::{
 use tracing::{error, info};
 
 pub struct InMemoryStorage {
-    keep_alives: Arc<RwLock<ZSet>>,
+    keep_alives: Arc<ZSet>,
     events: Arc<RwLock<Events>>,
     txs: Arc<RwLock<Vec<Sender<Event>>>>,
 }
@@ -44,10 +44,10 @@ impl Events {
             return;
         }
 
-        self.events.push_front(event);
+        self.events.push_back(event);
 
         if self.events.len() > self.max_history_size {
-            let _ = self.events.pop_back();
+            let _ = self.events.pop_front();
         }
     }
 
@@ -60,8 +60,8 @@ impl Events {
 
     fn events_since_ts(&self, ts: i64) -> Vec<Event> {
         match self.events.binary_search_by_key(&ts, |event| event.ts) {
-            Ok(index) => self.events.range(0..index).cloned().collect(),
-            Err(index) => self.events.range(0..index).cloned().collect(),
+            Ok(index) => self.events.range(index..).cloned().collect(),
+            Err(index) => self.events.range(index..).cloned().collect(),
         }
     }
 }
@@ -69,15 +69,14 @@ impl Events {
 impl InMemoryStorage {
     pub fn new(max_history_size: usize) -> Self {
         Self {
-            keep_alives: Arc::new(RwLock::new(ZSet::new())),
+            keep_alives: Arc::new(ZSet::new()),
             events: Arc::new(RwLock::new(Events::new(max_history_size))),
             txs: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
     async fn set_ka(&self, id: &str, ts: i64) {
-        let mut keep_alives = self.keep_alives.write().await;
-        keep_alives.update(id, ts);
+        self.keep_alives.update(id, ts);
     }
 
     async fn get_last_n_events(&self, n: usize) -> Vec<Event> {
@@ -100,8 +99,7 @@ impl Default for InMemoryStorage {
 #[async_trait]
 impl Storage for InMemoryStorage {
     async fn get(&self, id: &str) -> Option<i64> {
-        let keep_alives = self.keep_alives.read().await;
-        keep_alives.get(id).copied()
+        self.keep_alives.get(id)
     }
 
     async fn set(&self, id: &str, ts: i64, is_connection_event: bool) {
@@ -135,13 +133,12 @@ impl Storage for InMemoryStorage {
 
     async fn serialize(&self) -> Result<Vec<u8>> {
         let t0 = std::time::Instant::now();
-        let keep_alive = self.keep_alives.read().await;
 
-        let bin = to_allocvec(&keep_alive.scores)?;
+        let bin = to_allocvec(&self.keep_alives.scores)?;
         info!(
             "Serialized state in {:.2} secs ({} keys)",
             t0.elapsed().as_secs_f32(),
-            keep_alive.scores.len()
+            self.keep_alives.scores.len()
         );
         Ok(bin)
     }
@@ -177,14 +174,13 @@ impl Storage for InMemoryStorage {
 
             loop {
                 {
-                    let keep_alives = keep_alives_c.read().await;
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_millis() as i64;
 
-                    let dead_ids =
-                        keep_alives.range(oldest_ts, now - DEAD_DEVICE_TIMEOUT.as_millis() as i64);
+                    let dead_ids = keep_alives_c
+                        .range(oldest_ts, now - DEAD_DEVICE_TIMEOUT.as_millis() as i64);
 
                     for (id, ts) in dead_ids {
                         if ts > oldest_ts {
@@ -250,13 +246,45 @@ mod test {
         let events = storage.get_last_n_events(5).await;
         let expected_events = [
             Event {
+                ts: 30,
+                id: "lets".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
                 ts: 40,
                 id: "go".to_string(),
+                typ: EventType::Connected,
+            },
+        ];
+
+        assert_eq!(events, expected_events);
+    }
+
+    #[tokio::test]
+    async fn test_getting_events_since_some_ts() {
+        let storage = InMemoryStorage::new(5);
+        storage.set("hey", 10, true).await;
+        storage.set("ho", 20, true).await;
+        storage.set("lets", 30, true).await;
+        storage.set("go", 40, true).await;
+
+        // since the max_history_size is 2, we should
+        // have the last 3 events, which are go, lets, ho.
+        let events = storage.events_since_ts(20).await;
+        let expected_events = [
+            Event {
+                ts: 20,
+                id: "ho".to_string(),
                 typ: EventType::Connected,
             },
             Event {
                 ts: 30,
                 id: "lets".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 40,
+                id: "go".to_string(),
                 typ: EventType::Connected,
             },
         ];

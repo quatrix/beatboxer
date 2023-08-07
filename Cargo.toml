@@ -10,6 +10,7 @@ anyhow = "1.0.72"
 axum = { version = "0.6.19", features = ["tracing", "ws"] }
 barrage = "0.2.3"
 clap = { version = "4.3.19", features = ["derive"] }
+crossbeam-skiplist = { version = "0.1.1", features = ["crossbeam-epoch"] }
 dashmap = { version = "5.5.0", features = ["serde"] }
 futures = "0.3.28"
 metrics = "0.21.1"

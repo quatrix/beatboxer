@@ -6,6 +6,8 @@ use rocksdb::DB;
 
 use anyhow::Result;
 
+use crate::keep_alive::types::Event;
+
 use super::Storage;
 pub struct PersistentStorage {
     db: Arc<DB>,
@@ -51,7 +53,7 @@ impl Storage for PersistentStorage {
         }
     }
 
-    async fn serialize(&self) -> Result<Vec<u8>> {
+    async fn serialize_state(&self) -> Result<Vec<u8>> {
         let mut h: HashMap<String, i64> = HashMap::new();
         for r in self.db.iterator(rocksdb::IteratorMode::Start) {
             let (key, value) = r.unwrap();
@@ -61,6 +63,12 @@ impl Storage for PersistentStorage {
             );
         }
         let bin = to_allocvec(&h)?;
+        Ok(bin)
+    }
+
+    async fn serialize_events(&self) -> Result<Vec<u8>> {
+        let e: Vec<Event> = vec![];
+        let bin = to_allocvec(&e)?;
         Ok(bin)
     }
 }

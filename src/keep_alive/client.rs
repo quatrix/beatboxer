@@ -1,9 +1,19 @@
-use crate::keep_alive::constants::{SOCKET_READ_LONG_TIMEOUT, SOCKET_WRITE_TIMEOUT};
+use crate::keep_alive::{
+    constants::{SOCKET_READ_LONG_TIMEOUT, SOCKET_WRITE_TIMEOUT},
+    types::Event,
+};
 
 use super::KeepAlive;
+use anyhow::Result;
 
 use postcard::from_bytes;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use serde::{de::DeserializeOwned, Deserialize};
+use std::{
+    collections::{HashMap, VecDeque},
+    net::SocketAddr,
+    sync::Arc,
+    time::Duration,
+};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -11,6 +21,45 @@ use tokio::{
     time::timeout,
 };
 use tracing::{debug, error, info};
+
+async fn read_blob<T: Clone + DeserializeOwned>(
+    tag: &str,
+    socket: &mut BufReader<TcpStream>,
+    addr: &str,
+) -> Result<T> {
+    let t0 = std::time::Instant::now();
+    let mut buf = String::new();
+
+    let _ = timeout(SOCKET_READ_LONG_TIMEOUT, socket.read_line(&mut buf)).await?;
+
+    let blob_len = buf.trim().parse::<usize>()?;
+
+    let mut blob = vec![0; blob_len];
+
+    info!("[{}] Getting {}... (size: {})", addr, tag, blob_len);
+
+    let _ = timeout(SOCKET_READ_LONG_TIMEOUT, socket.read_exact(&mut blob)).await?;
+
+    info!(
+        "[{}] Got {} from. (size: {}) took: {:.2} secs",
+        addr,
+        tag,
+        blob_len,
+        t0.elapsed().as_secs_f32()
+    );
+
+    let t0 = std::time::Instant::now();
+    let blob: T = from_bytes(&blob)?;
+
+    info!(
+        "[{}] Deserialized {} took: {:.2} secs",
+        addr,
+        tag,
+        t0.elapsed().as_secs_f32()
+    );
+
+    Ok(blob)
+}
 
 impl KeepAlive {
     pub fn connect_to_nodes(&self) {
@@ -34,57 +83,19 @@ impl KeepAlive {
                                 }
                             }
 
-                            let mut buf = String::new();
-
-                            if let Err(e) =
-                                timeout(SOCKET_READ_LONG_TIMEOUT, socket.read_line(&mut buf)).await
+                            let ka = match read_blob::<HashMap<String, i64>>(
+                                "STATE",
+                                &mut socket,
+                                &addr,
+                            )
+                            .await
                             {
-                                error!("[{}] Error reading ka_len line from socket {:?}", addr, e);
-                                continue;
-                            }
-
-                            let ka_len = match buf.trim().parse::<usize>() {
-                                Ok(ka_len) => ka_len,
-                                Err(e) => {
-                                    error!("[{}] Invalid ka_len: {} error: {}", addr, buf, e);
-                                    continue;
-                                }
-                            };
-
-                            let mut ka = vec![0; ka_len];
-
-                            let t0 = std::time::Instant::now();
-                            info!("[{}] Getting state... (size: {})", addr, ka_len);
-
-                            if let Err(e) =
-                                timeout(SOCKET_READ_LONG_TIMEOUT, socket.read_exact(&mut ka)).await
-                            {
-                                error!("[{}] Failed getting STATE: {:?}", addr, e);
-                                continue;
-                            }
-
-                            info!(
-                                "[{}] Got state from. (size: {}) took: {:.2} secs",
-                                addr,
-                                ka_len,
-                                t0.elapsed().as_secs_f32()
-                            );
-
-                            let t0 = std::time::Instant::now();
-                            let ka = match from_bytes::<HashMap<String, i64>>(&ka) {
                                 Ok(ka) => ka,
                                 Err(e) => {
-                                    error!("[{}] Invalid ka: {} error: {}", addr, buf, e);
+                                    error!("error while reading STATE blob: {:?}", e);
                                     continue;
                                 }
                             };
-
-                            info!(
-                                "[{}] Deserializing state took: {:.2} secs ({} keys)",
-                                addr,
-                                ka.keys().len(),
-                                t0.elapsed().as_secs_f32()
-                            );
 
                             let t0 = std::time::Instant::now();
                             kac.bulk_set(ka).await;
@@ -94,6 +105,19 @@ impl KeepAlive {
                                 addr,
                                 t0.elapsed().as_secs_f32()
                             );
+
+                            let events =
+                                match read_blob::<VecDeque<Event>>("EVENTS", &mut socket, &addr)
+                                    .await
+                                {
+                                    Ok(events) => events,
+                                    Err(e) => {
+                                        error!("error while reading EVENTS blob: {:?}", e);
+                                        continue;
+                                    }
+                                };
+
+                            kac.merge_events(events).await;
 
                             info!("[{}] Synched. listening on updates...", addr);
 

@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 #[derive(Clone, Debug)]
 pub struct KeepAliveUpdate {
     pub id: String,
@@ -10,13 +12,13 @@ pub enum Message {
     KeepAliveUpdate(KeepAliveUpdate),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub enum EventType {
     Connected,
     Dead,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Event {
     pub ts: i64,
     pub id: String,

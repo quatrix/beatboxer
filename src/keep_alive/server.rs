@@ -6,7 +6,9 @@ use crate::keep_alive::types::Message;
 use super::KeepAlive;
 
 use anyhow::Result;
+use std::net::SocketAddr;
 use std::{sync::Arc, time::Instant};
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
 use tokio::{
@@ -15,6 +17,29 @@ use tokio::{
     time::timeout,
 };
 use tracing::{debug, error, info};
+
+async fn send_blob(
+    tag: &str,
+    socket: &mut TcpStream,
+    addr: &SocketAddr,
+    blob: &Vec<u8>,
+) -> Result<()> {
+    let t0 = std::time::Instant::now();
+
+    let blob_len = format!("{}\n", blob.len());
+
+    let _ = timeout(SOCKET_WRITE_TIMEOUT, socket.write_all(blob_len.as_bytes())).await?;
+    let _ = timeout(SOCKET_WRITE_LONG_TIMEOUT, socket.write_all(blob)).await?;
+
+    info!(
+        "[{}] send blob {} took {:.2} sec",
+        addr,
+        tag,
+        t0.elapsed().as_secs_f32()
+    );
+
+    Ok(())
+}
 
 impl KeepAlive {
     pub async fn listen(&self) -> Result<()> {
@@ -56,42 +81,27 @@ impl KeepAlive {
 
                         if n == 5 && buf[0..n] == *b"SYNC\n" {
                             let t0 = std::time::Instant::now();
-                            let ka = kac.serialize().await.unwrap();
-                            info!(
-                                "[{}] Serialized STATE took {:.2} sec",
-                                addr,
-                                t0.elapsed().as_secs_f32()
-                            );
+                            let state = kac.serialize_state().await.unwrap();
+                            let events = kac.serialize_events().await.unwrap();
 
-                            let ka_len = format!("{}\n", ka.len());
-                            let t0 = std::time::Instant::now();
-                            info!("[{}] Sending STATE... (size {})", addr, ka.len());
-                            if let Err(e) =
-                                timeout(SOCKET_WRITE_TIMEOUT, socket.write_all(ka_len.as_bytes()))
-                                    .await
-                            {
-                                error!("[{}] Error writing SYNC to socket: {}", addr, e);
+                            if let Err(e) = send_blob("STATE", &mut socket, &addr, &state).await {
+                                error!("sending state blob failed: {:?}", e);
                                 break;
                             }
+
+                            if let Err(e) = send_blob("EVENTS", &mut socket, &addr, &events).await {
+                                error!("sending events blob failed: {:?}", e);
+                                break;
+                            }
+
                             info!(
-                                "[{}] Sent STATE. size {} took: {:.2}) secs",
+                                "[{}] SYNC end-to-end time {:.2} sec",
                                 addr,
-                                ka.len(),
                                 t0.elapsed().as_secs_f32()
                             );
 
-                            match timeout(SOCKET_WRITE_LONG_TIMEOUT, socket.write_all(&ka)).await {
-                                Ok(_) => {
-                                    already_synched = true;
-
-                                    // XXX: we want to start checking keep alive only after sync
-                                    last_pong = Instant::now();
-                                }
-                                Err(e) => {
-                                    error!("[{}] Error writing STATE to socket: {}", addr, e);
-                                    break;
-                                }
-                            }
+                            last_pong = Instant::now();
+                            already_synched = true;
                         } else {
                             error!("[{}] Invalid command: {:?}", addr, &buf[0..n]);
                             continue;

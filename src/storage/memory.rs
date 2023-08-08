@@ -1,6 +1,5 @@
 use std::{
-    cmp::min,
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
     time::Duration,
 };
@@ -10,7 +9,9 @@ use crate::keep_alive::{
     types::{Event, EventType},
 };
 
-use super::{zset::ZSet, Storage};
+use self::{events::Events, zset::ZSet};
+
+use super::Storage;
 use anyhow::Result;
 use axum::async_trait;
 use postcard::to_allocvec;
@@ -20,50 +21,14 @@ use tokio::sync::{
 };
 use tracing::{error, info};
 
+mod events;
+mod zset;
+
 pub struct InMemoryStorage {
     keep_alives: Arc<ZSet>,
     events: Arc<RwLock<Events>>,
     txs: Arc<RwLock<Vec<Sender<Event>>>>,
-}
-
-struct Events {
     max_history_size: usize,
-    events: VecDeque<Event>,
-}
-
-impl Events {
-    fn new(max_history_size: usize) -> Self {
-        Self {
-            max_history_size,
-            events: VecDeque::new(),
-        }
-    }
-
-    fn store_event(&mut self, event: Event) {
-        if self.max_history_size == 0 {
-            return;
-        }
-
-        self.events.push_back(event);
-
-        if self.events.len() > self.max_history_size {
-            let _ = self.events.pop_front();
-        }
-    }
-
-    fn get_last_n_events(&self, n: usize) -> Vec<Event> {
-        self.events
-            .range(0..min(n, self.events.len()))
-            .cloned()
-            .collect()
-    }
-
-    fn events_since_ts(&self, ts: i64) -> Vec<Event> {
-        match self.events.binary_search_by_key(&ts, |event| event.ts) {
-            Ok(index) => self.events.range(index..).cloned().collect(),
-            Err(index) => self.events.range(index..).cloned().collect(),
-        }
-    }
 }
 
 impl InMemoryStorage {
@@ -72,16 +37,12 @@ impl InMemoryStorage {
             keep_alives: Arc::new(ZSet::new()),
             events: Arc::new(RwLock::new(Events::new(max_history_size))),
             txs: Arc::new(RwLock::new(Vec::new())),
+            max_history_size,
         }
     }
 
     async fn set_ka(&self, id: &str, ts: i64) {
         self.keep_alives.update(id, ts);
-    }
-
-    async fn get_last_n_events(&self, n: usize) -> Vec<Event> {
-        let events = self.events.read().await;
-        events.get_last_n_events(n)
     }
 
     async fn events_since_ts(&self, ts: i64) -> Vec<Event> {
@@ -131,7 +92,12 @@ impl Storage for InMemoryStorage {
         }
     }
 
-    async fn serialize(&self) -> Result<Vec<u8>> {
+    async fn merge_events(&self, new_data: VecDeque<Event>) {
+        let mut events = self.events.write().await;
+        events.merge(&new_data);
+    }
+
+    async fn serialize_state(&self) -> Result<Vec<u8>> {
         let t0 = std::time::Instant::now();
 
         let bin = to_allocvec(&self.keep_alives.scores)?;
@@ -143,8 +109,21 @@ impl Storage for InMemoryStorage {
         Ok(bin)
     }
 
+    async fn serialize_events(&self) -> Result<Vec<u8>> {
+        let t0 = std::time::Instant::now();
+        let events = self.events.read().await;
+
+        let bin = to_allocvec(&events.events)?;
+        info!(
+            "Serialized state in {:.2} secs ({} keys)",
+            t0.elapsed().as_secs_f32(),
+            self.keep_alives.scores.len()
+        );
+        Ok(bin)
+    }
+
     async fn subscribe(&self, offset: Option<i64>) -> Option<Receiver<Event>> {
-        let (tx, rx) = mpsc::channel(10000);
+        let (tx, rx) = mpsc::channel(self.max_history_size + 10000);
 
         if let Some(offset) = offset {
             for event in self.events_since_ts(offset).await {
@@ -215,7 +194,7 @@ impl Storage for InMemoryStorage {
 
 #[cfg(test)]
 mod test {
-    use super::{Event, EventType, InMemoryStorage};
+    use super::{Event, EventType, Events, InMemoryStorage};
     use crate::storage::Storage;
 
     #[tokio::test]
@@ -234,33 +213,6 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_storing_events() {
-        let storage = InMemoryStorage::new(2);
-        storage.set("hey", 10, true).await;
-        storage.set("ho", 20, true).await;
-        storage.set("lets", 30, true).await;
-        storage.set("go", 40, true).await;
-
-        // since the max_history_size is 2, we should
-        // have the last 3 events, which are go, lets, ho.
-        let events = storage.get_last_n_events(5).await;
-        let expected_events = [
-            Event {
-                ts: 30,
-                id: "lets".to_string(),
-                typ: EventType::Connected,
-            },
-            Event {
-                ts: 40,
-                id: "go".to_string(),
-                typ: EventType::Connected,
-            },
-        ];
-
-        assert_eq!(events, expected_events);
-    }
-
-    #[tokio::test]
     async fn test_getting_events_since_some_ts() {
         let storage = InMemoryStorage::new(5);
         storage.set("hey", 10, true).await;
@@ -268,8 +220,6 @@ mod test {
         storage.set("lets", 30, true).await;
         storage.set("go", 40, true).await;
 
-        // since the max_history_size is 2, we should
-        // have the last 3 events, which are go, lets, ho.
         let events = storage.events_since_ts(20).await;
         let expected_events = [
             Event {
@@ -289,6 +239,41 @@ mod test {
             },
         ];
 
+        assert_eq!(events, expected_events);
+    }
+
+    #[tokio::test]
+    async fn test_getting_events_since_0_should_return_all_events() {
+        let storage = InMemoryStorage::new(5);
+
+        let expected_events = [
+            Event {
+                ts: 10,
+                id: "hey".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 20,
+                id: "ho".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 30,
+                id: "lets".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 40,
+                id: "go".to_string(),
+                typ: EventType::Connected,
+            },
+        ];
+
+        for event in &expected_events {
+            storage.set(&event.id, event.ts, true).await;
+        }
+
+        let events = storage.events_since_ts(0).await;
         assert_eq!(events, expected_events);
     }
 }

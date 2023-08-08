@@ -135,18 +135,27 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     if let Some(rx) = keep_alive.subscribe(params.offset).await {
-        ws.on_upgrade(move |socket| handle_socket(socket, rx))
+        ws.on_upgrade(move |socket| handle_socket(Arc::clone(&keep_alive), socket, rx))
     } else {
         panic!("can't get rx for updates")
     }
 }
 
-async fn handle_socket(mut socket: WebSocket, mut rx: Receiver<Event>) {
+async fn handle_socket(
+    keep_alive: Arc<dyn KeepAliveTrait + Send + Sync>,
+    mut socket: WebSocket,
+    mut rx: Receiver<Event>,
+) {
     loop {
         if let Some(event) = rx.recv().await {
+            let current_ts = match keep_alive.get(&event.id).await {
+                Some(ts) => format!("{}", ts),
+                None => "".to_string(),
+            };
+
             let msg = axum::extract::ws::Message::Text(format!(
-                "{} - {} - {:?}",
-                event.ts, event.id, event.typ,
+                "{} - {} - {:?} - [{}]",
+                event.ts, event.id, event.typ, current_ts,
             ));
 
             if let Err(e) = socket.send(msg).await {

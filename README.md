@@ -21,7 +21,8 @@ Getting live updates about device `connecting` and `dying` (keep alives not rece
 `ws://host:port/updates` - start getting updates from now
 `ws://host:port/updates?offset=1691517188570` - start getting updates from timestamp in the past, events history is currently hardcoded to last 500k events.
 
-The protocol format currently looks like this, but will probably change.
+## Protocol
+The protocol format currently looks like this, but will for sure change, probably to some delimited format.
 ```
 1691517188570 - a - Connected - [1691517188570]
 1691517189761 - b - Connected - [1691517189761]
@@ -36,9 +37,9 @@ The protocol format currently looks like this, but will probably change.
 Breakdown:
 
 ```
-1691517779461 - event timestamp
-d - event device id (what sent to /pulse/)
-Dead - event type (Dead/Connected)
+1691517779461   - event timestamp
+d               - event device id (what sent to /pulse/)
+Dead            - event type (Dead/Connected)
 [1691517759461] - the up to date timestamp of the keep alive for that device id
 ```
 
@@ -48,6 +49,17 @@ The reason to include the [ts] is for scenarios where these notifications used t
 * When it goes back it will ask for all the events since last time it was up
 * Then for device FOO it might see that it was DEAD and then CONNECTED again
 * You might not want to notify the device died, if since it's already back up.
+* So when getting an event, you also get the up-to-date status for the same device, and you can decide what to do with it.
+
+## Offsets
+
+Currenly storing offsets isn't implemented and it's the client's responsibility. But it's probably a good idea to store them since we can probably treat them like timestamps and store them in the same distributed hashmap we're using for the heartbeats.
+
+Some options how to handle the offsets/commits (ideas):
+
+* The websocket consumer can send `COMMIT` messages every now and again, indicating it's done handling messages up to this point.
+* Long polling and `AUTO COMMIT`, client polls for new messages, and if enough time passed it's assumed the offset of the previous poll can be commited.
+* Something like the previous option but with websockets, if user continues to receive messages, assume older messages can be commited. 
 
 # Constrains and Assumptions
 
@@ -181,3 +193,6 @@ Each node exports a prometheus endpoint `/metrics` with HTTP times and messages 
 1. Data compection when sending `SYNC` between nodes.
 1. Getting peers from `etcd` / `consul`
 1. Add `/ready` readiness probe, to make the node *ready* only after it done the `SYNC`
+1. Some sort of a `COMMIT` mechanism for notification offsets, maybe long polling, maybe storing consumer gorup offsets like kafka?
+1. Currently notification history is `sorted + deduplicated` on `SYNC`, but still duplicate `DEAD` events are possible, need to implement reconciliation for events.
+

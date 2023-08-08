@@ -12,13 +12,13 @@ pub enum Message {
     KeepAliveUpdate(KeepAliveUpdate),
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub enum EventType {
     Connected,
     Dead,
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub struct Event {
     pub ts: i64,
     pub id: String,

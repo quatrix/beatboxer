@@ -14,11 +14,40 @@ Distributed heartbeat tracking service in Rust. 🦀
 
 `GET /ka/:id` - gets the latest heartbeat for device with `:id`
 
-# Future API
+# Notifications
 
-Expose a stream of changes, for example device becomes a live, device disconnects, device died. this will probably be a rabbitmq publisher, but other interfaces are possible too, for example kafka, or even connecting via websocket and getting events.
+Getting live updates about device `connecting` and `dying` (keep alives not received in a while)
 
-Currently only the RabbitMQ one is planned.
+`ws://host:port/updates` - start getting updates from now
+`ws://host:port/updates?offset=1691517188570` - start getting updates from timestamp in the past, events history is currently hardcoded to last 500k events.
+
+The protocol format currently looks like this, but will probably change.
+```
+1691517188570 - a - Connected - [1691517188570]
+1691517189761 - b - Connected - [1691517189761]
+1691517191344 - c - Connected - [1691517191344]
+1691517208570 - a - Dead - [1691517188570]
+1691517209761 - b - Dead - [1691517189761]
+1691517211344 - c - Dead - [1691517191344]
+1691517759461 - d - Connected - [1691517759461]
+1691517779461 - d - Dead - [1691517759461]
+```
+
+Breakdown:
+
+```
+1691517779461 - event timestamp
+d - event device id (what sent to /pulse/)
+Dead - event type (Dead/Connected)
+[1691517759461] - the up to date timestamp of the keep alive for that device id
+```
+
+The reason to include the [ts] is for scenarios where these notifications used to control another system:
+* Some other system, called handler, listens to these websocket events and does something when device dies, for example sends a notification
+* The handler might be down for some time due to a restart or some downtime
+* When it goes back it will ask for all the events since last time it was up
+* Then for device FOO it might see that it was DEAD and then CONNECTED again
+* You might not want to notify the device died, if since it's already back up.
 
 # Constrains and Assumptions
 
@@ -26,11 +55,10 @@ Currently only the RabbitMQ one is planned.
 
 * ~1M devices
 * Device sends heartbeat every 10s
-* Device id length ~15 bytes 
+* Device id length ~15 bytes
 * When asking about a heartbeat, it's ok to get stale data, but not older than the previous beat
 * When device stops sending heartbeats, need to store the last heartbeat for a couple of minutes.
 * We're storing `timestamps`, on reconciliation we can safely take the last one.
-
 
 # Why?
 
@@ -143,6 +171,8 @@ It's not clear at which stage to become ready.
 
 Currently `beatboxer` supports an optional persistency to disk with `rocksdb`, this is enabled with `--use-rocksdb` but there's a significant performance penalty compared with the default in-memory store.
 
+*NOTE:* Notifications haven't been implemented for persistent storage yet!.
+
 # Monitoring
 
 Each node exports a prometheus endpoint `/metrics` with HTTP times and messages latency between the nodes.
@@ -151,4 +181,3 @@ Each node exports a prometheus endpoint `/metrics` with HTTP times and messages 
 1. Data compection when sending `SYNC` between nodes.
 1. Getting peers from `etcd` / `consul`
 1. Add `/ready` readiness probe, to make the node *ready* only after it done the `SYNC`
-1. Add another storage mode using `skip-lists` / `sorted-set`, storing the heartbeats sorted by time allows polling efficiently for devices that haven't sent a heartbeat in a while, and to output an event when a device is `DEAD` or `CONNECTED` when it starts sending heartbeats again.

@@ -160,6 +160,7 @@ async fn handle_socket(
 
             if let Err(e) = socket.send(msg).await {
                 error!("error sending ws message: {:?}", e);
+                break;
             }
         }
     }

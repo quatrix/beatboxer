@@ -1,10 +1,14 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use axum::async_trait;
 use postcard::to_allocvec;
 use rocksdb::DB;
 
 use anyhow::Result;
+use tokio::sync::mpsc::Receiver;
 
 use crate::keep_alive::types::Event;
 
@@ -70,5 +74,10 @@ impl Storage for PersistentStorage {
         let e: Vec<Event> = vec![];
         let bin = to_allocvec(&e)?;
         Ok(bin)
+    }
+
+    async fn merge_events(&self, _new_data: VecDeque<Event>) {}
+    async fn subscribe(&self, _offset: Option<i64>) -> Option<Receiver<Event>> {
+        None
     }
 }

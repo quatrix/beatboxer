@@ -14,10 +14,7 @@ pub trait Storage {
     async fn bulk_set(&self, new_data: HashMap<String, i64>);
     async fn serialize_state(&self) -> Result<Vec<u8>>;
     async fn serialize_events(&self) -> Result<Vec<u8>>;
-    async fn subscribe(&self, _offset: Option<i64>) -> Option<Receiver<Event>> {
-        None
-    }
-
+    async fn merge_events(&self, _new_data: VecDeque<Event>);
+    async fn subscribe(&self, _offset: Option<i64>) -> Option<Receiver<Event>>;
     fn watch_for_updates(&self) {}
-    async fn merge_events(&self, _new_data: VecDeque<Event>) {}
 }

@@ -1,5 +1,4 @@
 use std::collections::{HashSet, VecDeque};
-
 use tracing::info;
 
 use crate::keep_alive::types::Event;
@@ -62,9 +61,9 @@ fn merge_without_duplicates(a: &VecDeque<Event>, b: &VecDeque<Event>) -> VecDequ
     let mut seen = HashSet::new();
 
     for item in a.iter().chain(b.iter()) {
-        if !seen.contains(&item.ts) {
+        if !seen.contains(&item) {
             result.push_back(item.clone());
-            seen.insert(item.ts);
+            seen.insert(item);
         }
     }
 
@@ -149,6 +148,69 @@ mod test {
             ts: 40,
             id: "go".to_string(),
             typ: EventType::Connected,
+        });
+
+        e0.merge(&e1.events);
+
+        assert_eq!(e0.events, expected_events);
+    }
+
+    #[test]
+    fn test_merging_should_remove_duplicates() {
+        let expected_events = [
+            Event {
+                ts: 20,
+                id: "ho".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 30,
+                id: "lets".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 40,
+                id: "go".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 50,
+                id: "vova".to_string(),
+                typ: EventType::Dead,
+            },
+        ];
+
+        let mut e0 = Events::new(4);
+        let mut e1 = Events::new(4);
+
+        e0.store_event(Event {
+            ts: 20,
+            id: "ho".to_string(),
+            typ: EventType::Connected,
+        });
+
+        e0.store_event(Event {
+            ts: 30,
+            id: "lets".to_string(),
+            typ: EventType::Connected,
+        });
+
+        e1.store_event(Event {
+            ts: 40,
+            id: "go".to_string(),
+            typ: EventType::Connected,
+        });
+
+        e1.store_event(Event {
+            ts: 20,
+            id: "ho".to_string(),
+            typ: EventType::Connected,
+        });
+
+        e1.store_event(Event {
+            ts: 50,
+            id: "vova".to_string(),
+            typ: EventType::Dead,
         });
 
         e0.merge(&e1.events);

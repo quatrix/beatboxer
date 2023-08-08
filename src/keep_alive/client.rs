@@ -7,10 +7,9 @@ use super::KeepAlive;
 use anyhow::Result;
 
 use postcard::from_bytes;
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::de::DeserializeOwned;
 use std::{
     collections::{HashMap, VecDeque},
-    net::SocketAddr,
     sync::Arc,
     time::Duration,
 };

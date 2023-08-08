@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     sync::Arc,
     time::Duration,
 };
@@ -16,7 +16,7 @@ use anyhow::Result;
 use axum::async_trait;
 use postcard::to_allocvec;
 use tokio::sync::{
-    mpsc::{self, Receiver, Sender},
+    mpsc::{self, error::TrySendError, Receiver, Sender},
     RwLock,
 };
 use tracing::{error, info};
@@ -148,8 +148,7 @@ impl Storage for InMemoryStorage {
             let mut oldest_ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis() as i64
-                - (120 * 1000); // older than 2m ago, we don't care
+                .as_millis() as i64;
 
             loop {
                 {
@@ -164,21 +163,39 @@ impl Storage for InMemoryStorage {
                     for (id, ts) in dead_ids {
                         if ts > oldest_ts {
                             {
-                                let mut events = events_c.write().await;
-                                let txs = txs_c.read().await;
-
                                 let event = Event {
                                     ts: ts + DEAD_DEVICE_TIMEOUT.as_millis() as i64,
                                     id: id.to_string(),
                                     typ: EventType::Dead,
                                 };
 
-                                events.store_event(event.clone());
+                                {
+                                    let mut events = events_c.write().await;
+                                    events.store_event(event.clone());
+                                }
 
-                                for tx in txs.iter() {
-                                    if let Err(e) = tx.send(event.clone()).await {
-                                        error!("unable to send update: {:?}", e);
+                                let mut gc_senders = false;
+                                {
+                                    let txs = txs_c.read().await;
+
+                                    for tx in txs.iter() {
+                                        match tx.try_send(event.clone()) {
+                                            Ok(_) => {}
+                                            Err(TrySendError::Closed(_)) => {
+                                                error!("(subscriber) Channel closed.");
+                                                gc_senders = true;
+                                            }
+                                            Err(TrySendError::Full(_)) => {
+                                                error!("(subscriber) Channel full.");
+                                            }
+                                        }
                                     }
+                                }
+
+                                if gc_senders {
+                                    info!("cleaninig dead subscribers");
+                                    let mut txs = txs_c.write().await;
+                                    txs.retain(|tx| !tx.is_closed());
                                 }
                             }
                             oldest_ts = ts;
@@ -194,7 +211,7 @@ impl Storage for InMemoryStorage {
 
 #[cfg(test)]
 mod test {
-    use super::{Event, EventType, Events, InMemoryStorage};
+    use super::{Event, EventType, InMemoryStorage};
     use crate::storage::Storage;
 
     #[tokio::test]

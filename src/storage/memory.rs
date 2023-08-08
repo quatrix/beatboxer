@@ -1,5 +1,7 @@
 use std::{
+    cmp::max,
     collections::{HashMap, VecDeque},
+    num::NonZeroUsize,
     sync::Arc,
     time::Duration,
 };
@@ -14,6 +16,7 @@ use self::{events::Events, zset::ZSet};
 use super::Storage;
 use anyhow::Result;
 use axum::async_trait;
+use lru::LruCache;
 use postcard::to_allocvec;
 use tokio::sync::{
     mpsc::{self, error::TrySendError, Receiver, Sender},
@@ -138,7 +141,7 @@ impl Storage for InMemoryStorage {
     }
 
     async fn subscribe(&self, offset: Option<i64>) -> Option<Receiver<Event>> {
-        let (tx, rx) = mpsc::channel(self.max_history_size + 10000);
+        let (tx, rx) = mpsc::channel(self.max_history_size + 500_000);
 
         if let Some(offset) = offset {
             for event in self.events_since_ts(offset).await {
@@ -165,6 +168,8 @@ impl Storage for InMemoryStorage {
                 .unwrap()
                 .as_millis() as i64;
 
+            let mut cache = LruCache::new(NonZeroUsize::new(100).unwrap());
+
             loop {
                 {
                     let now = std::time::SystemTime::now()
@@ -172,49 +177,60 @@ impl Storage for InMemoryStorage {
                         .unwrap()
                         .as_millis() as i64;
 
-                    let dead_ids = keep_alives_c
-                        .range(oldest_ts, now - DEAD_DEVICE_TIMEOUT.as_millis() as i64);
+                    let dead_ids = keep_alives_c.range(
+                        oldest_ts,
+                        max(oldest_ts, now - DEAD_DEVICE_TIMEOUT.as_millis() as i64),
+                    );
 
                     for (id, ts) in dead_ids {
-                        if ts > oldest_ts {
-                            {
-                                let event = Event {
-                                    ts: ts + DEAD_DEVICE_TIMEOUT.as_millis() as i64,
-                                    id: id.to_string(),
-                                    typ: EventType::Dead,
-                                };
+                        // using LRU cache as a hack because
+                        // millis isn't enough resolution to skip
+                        // events already sent based on time, since
+                        // in the same millis we could have multiple events
+                        // but they could come in while we're checking for them
+                        // and thus we'll be split in a millis and miss them
+                        // on the next heartbeat.
+                        if cache.get(&id) == Some(&ts) {
+                            continue;
+                        }
 
-                                {
-                                    let mut events = events_c.write().await;
-                                    events.store_event(event.clone());
-                                }
+                        cache.put(id.clone(), ts);
 
-                                let mut gc_senders = false;
-                                {
-                                    let txs = txs_c.read().await;
+                        let event = Event {
+                            ts: ts + DEAD_DEVICE_TIMEOUT.as_millis() as i64,
+                            id: id.to_string(),
+                            typ: EventType::Dead,
+                        };
 
-                                    for tx in txs.iter() {
-                                        match tx.try_send(event.clone()) {
-                                            Ok(_) => {}
-                                            Err(TrySendError::Closed(_)) => {
-                                                error!("(subscriber) Channel closed.");
-                                                gc_senders = true;
-                                            }
-                                            Err(TrySendError::Full(_)) => {
-                                                error!("(subscriber) Channel full.");
-                                            }
-                                        }
+                        {
+                            let mut events = events_c.write().await;
+                            events.store_event(event.clone());
+                        }
+
+                        let mut gc_senders = false;
+                        {
+                            let txs = txs_c.read().await;
+
+                            for tx in txs.iter() {
+                                match tx.try_send(event.clone()) {
+                                    Ok(_) => {}
+                                    Err(TrySendError::Closed(_)) => {
+                                        error!("(subscriber) Channel closed.");
+                                        gc_senders = true;
+                                    }
+                                    Err(TrySendError::Full(_)) => {
+                                        error!("(subscriber) Channel full.");
                                     }
                                 }
-
-                                if gc_senders {
-                                    info!("cleaninig dead subscribers");
-                                    let mut txs = txs_c.write().await;
-                                    txs.retain(|tx| !tx.is_closed());
-                                }
                             }
-                            oldest_ts = ts;
                         }
+
+                        if gc_senders {
+                            info!("cleaninig dead subscribers");
+                            let mut txs = txs_c.write().await;
+                            txs.retain(|tx| !tx.is_closed());
+                        }
+                        oldest_ts = ts;
                     }
                 }
 

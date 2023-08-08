@@ -19,6 +19,7 @@ Distributed heartbeat tracking service in Rust. 🦀
 Getting live updates about device `connecting` and `dying` (keep alives not received in a while)
 
 `ws://host:port/updates` - start getting updates from now
+
 `ws://host:port/updates?offset=1691517188570` - start getting updates from timestamp in the past, events history is currently hardcoded to last 500k events.
 
 The protocol format currently looks like this, but will probably change.

@@ -75,12 +75,27 @@ impl Storage for InMemoryStorage {
             };
 
             events.store_event(event.clone());
+            let mut gc_senders = false;
 
-            let txs = self.txs.read().await;
-            for tx in txs.iter() {
-                if let Err(e) = tx.send(event.clone()).await {
-                    error!("unable to send update: {:?}", e);
+            {
+                let txs = self.txs.read().await;
+                for tx in txs.iter() {
+                    match tx.try_send(event.clone()) {
+                        Ok(_) => {}
+                        Err(TrySendError::Closed(_)) => {
+                            error!("(subscriber) Channel closed.");
+                            gc_senders = true;
+                        }
+                        Err(TrySendError::Full(_)) => {
+                            error!("(subscriber) Channel full.");
+                        }
+                    }
                 }
+            }
+            if gc_senders {
+                info!("cleaninig dead subscribers");
+                let mut txs = self.txs.write().await;
+                txs.retain(|tx| !tx.is_closed());
             }
         }
     }

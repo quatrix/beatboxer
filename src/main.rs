@@ -1,6 +1,10 @@
 use anyhow::Result;
 use beatboxer::{
-    keep_alive::{types::Event, KeepAlive, KeepAliveTrait},
+    keep_alive::{
+        constants::is_dead,
+        types::{Event, EventType},
+        KeepAlive, KeepAliveTrait,
+    },
     metrics::{setup_metrics_recorder, track_metrics},
     storage::{memory::InMemoryStorage, persistent::PersistentStorage, Storage},
 };
@@ -148,14 +152,15 @@ async fn handle_socket(
 ) {
     loop {
         if let Some(event) = rx.recv().await {
-            let current_ts = match keep_alive.get(&event.id).await {
-                Some(ts) => format!("{}", ts),
-                None => "".to_string(),
+            let current_state = match keep_alive.get(&event.id).await {
+                Some(ts) if is_dead(ts) => EventType::Dead,
+                Some(_) => EventType::Connected,
+                None => EventType::Unknown,
             };
 
             let msg = axum::extract::ws::Message::Text(format!(
-                "{} - {} - {:?} - [{}]",
-                event.ts, event.id, event.typ, current_ts,
+                "{},{},{},{}",
+                event.ts, event.id, event.typ, current_state
             ));
 
             if let Err(e) = socket.send(msg).await {

@@ -25,32 +25,26 @@ Getting live updates about device `connecting` and `dying` (keep alives not rece
 ## Protocol
 The protocol format currently looks like this, but will for sure change, probably to some delimited format.
 ```
-1691517188570 - a - Connected - [1691517188570]
-1691517189761 - b - Connected - [1691517189761]
-1691517191344 - c - Connected - [1691517191344]
-1691517208570 - a - Dead - [1691517188570]
-1691517209761 - b - Dead - [1691517189761]
-1691517211344 - c - Dead - [1691517191344]
-1691517759461 - d - Connected - [1691517759461]
-1691517779461 - d - Dead - [1691517759461]
+1691517188570,a,CONNECTED,CONNECTED
+1691517189761,b,CONNECTED,CONNECTED
+1691517191344,c,CONNECTED,CONNECTED
+1691517208570,a,DEAD,DEAD
+1691517209761,b,DEAD,DEAD
+1691517211344,c,DEAD,DEAD
+1691517759461,d,CONNECTED,CONNECTED
+1691517779461,d,DEAD,CONNECTED
 ```
 
 Breakdown:
 
 ```
-1691517779461   - event timestamp
-d               - event device id (what sent to /pulse/)
-Dead            - event type (Dead/Connected)
-[1691517759461] - the up to date timestamp of the keep alive for that device id
+1691517779461 - event timestamp
+d             - event device id (what sent to /pulse/)
+DEAD          - event type (DEAD/CONNECTED)
+CONNECTED     - current state (DEAD/CONNECTED/UNKNOWN)
 ```
 
-The reason to include the [ts] is for scenarios where these notifications used to control another system:
-* Some other system, called handler, listens to these websocket events and does something when device dies, for example sends a notification
-* The handler might be down for some time due to a restart or some downtime
-* When it goes back it will ask for all the events since last time it was up
-* Then for device FOO it might see that it was DEAD and then CONNECTED again
-* You might not want to notify the device died, if since it's already back up.
-* So when getting an event, you also get the up-to-date status for the same device, and you can decide what to do with it.
+The event type (DEAD) is the event type at the time when the event happened, the last event kind (CONNECTED) is the state right now, at the moment of reading the history. This might be useful when the service reading the events goes offline and comes back, mean while a device might died and came back, you you'll get DEAD,CONNECTED which means at the time of timestamp it died (due to not sending heartbeats) but right now it's alive, so for example the service watching these events might want to react differently.
 
 ## Offsets
 

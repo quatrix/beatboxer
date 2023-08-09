@@ -16,6 +16,17 @@ pub enum Message {
 pub enum EventType {
     Connected,
     Dead,
+    Unknown,
+}
+
+impl std::fmt::Display for EventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EventType::Connected => write!(f, "CONNECTED"),
+            EventType::Dead => write!(f, "DEAD"),
+            EventType::Unknown => write!(f, "UNKNOWN"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]

@@ -166,6 +166,8 @@ impl Storage for InMemoryStorage {
                 .unwrap()
                 .as_millis() as i64;
 
+            let dead_ms = DEAD_DEVICE_TIMEOUT.as_millis() as i64;
+
             loop {
                 {
                     let now = std::time::SystemTime::now()
@@ -173,14 +175,13 @@ impl Storage for InMemoryStorage {
                         .unwrap()
                         .as_millis() as i64;
 
-                    let start = oldest_ts;
-                    let end = max(oldest_ts, now - DEAD_DEVICE_TIMEOUT.as_millis() as i64);
+                    let end = max(oldest_ts, now - dead_ms);
 
-                    let dead_ids = keep_alives_c.range(start, end);
+                    let dead_ids = keep_alives_c.range(oldest_ts, end);
 
                     for (id, ts) in dead_ids {
                         let event = Event {
-                            ts: ts + DEAD_DEVICE_TIMEOUT.as_millis() as i64,
+                            ts: ts + dead_ms,
                             id: id.to_string(),
                             typ: EventType::Dead,
                         };
@@ -213,8 +214,8 @@ impl Storage for InMemoryStorage {
                             let mut txs = txs_c.write().await;
                             txs.retain(|tx| !tx.is_closed());
                         }
-                        oldest_ts = end;
                     }
+                    oldest_ts = end;
                 }
 
                 tokio::time::sleep(Duration::from_secs(1)).await;

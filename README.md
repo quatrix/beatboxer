@@ -23,7 +23,8 @@ Getting live updates about device `connecting` and `dying` (keep alives not rece
 `ws://host:port/updates?offset=1691517188570` - start getting updates from timestamp in the past, events history is currently hardcoded to last 500k events.
 
 ## Protocol
-The protocol format currently looks like this, but will for sure change, probably to some delimited format.
+The protocol format currently looks like this:
+
 ```
 1691517188570,a,CONNECTED,CONNECTED
 1691517189761,b,CONNECTED,CONNECTED

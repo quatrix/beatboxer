@@ -65,7 +65,7 @@ impl ZSet {
     pub fn range(&self, start: i64, end: i64) -> Vec<(String, i64)> {
         let mut res = vec![];
 
-        let set_range = self.elements.range(start..=end);
+        let set_range = self.elements.range(start..end);
 
         for entry in set_range.into_iter() {
             let score = *entry.key();
@@ -81,6 +81,8 @@ impl ZSet {
 
 #[cfg(test)]
 mod test {
+    use crossbeam_skiplist::SkipSet;
+
     use super::ZSet;
 
     #[test]

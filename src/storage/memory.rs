@@ -1,7 +1,6 @@
 use std::{
     cmp::max,
     collections::{HashMap, VecDeque},
-    num::NonZeroUsize,
     sync::Arc,
     time::Duration,
 };
@@ -16,7 +15,6 @@ use self::{events::Events, zset::ZSet};
 use super::Storage;
 use anyhow::Result;
 use axum::async_trait;
-use lru::LruCache;
 use postcard::to_allocvec;
 use tokio::sync::{
     mpsc::{self, error::TrySendError, Receiver, Sender},
@@ -168,8 +166,6 @@ impl Storage for InMemoryStorage {
                 .unwrap()
                 .as_millis() as i64;
 
-            let mut cache = LruCache::new(NonZeroUsize::new(100).unwrap());
-
             loop {
                 {
                     let now = std::time::SystemTime::now()
@@ -177,25 +173,12 @@ impl Storage for InMemoryStorage {
                         .unwrap()
                         .as_millis() as i64;
 
-                    let dead_ids = keep_alives_c.range(
-                        oldest_ts,
-                        max(oldest_ts, now - DEAD_DEVICE_TIMEOUT.as_millis() as i64),
-                    );
+                    let start = oldest_ts;
+                    let end = max(oldest_ts, now - DEAD_DEVICE_TIMEOUT.as_millis() as i64);
+
+                    let dead_ids = keep_alives_c.range(start, end);
 
                     for (id, ts) in dead_ids {
-                        // using LRU cache as a hack because
-                        // millis isn't enough resolution to skip
-                        // events already sent based on time, since
-                        // in the same millis we could have multiple events
-                        // but they could come in while we're checking for them
-                        // and thus we'll be split in a millis and miss them
-                        // on the next heartbeat.
-                        if cache.get(&id) == Some(&ts) {
-                            continue;
-                        }
-
-                        cache.put(id.clone(), ts);
-
                         let event = Event {
                             ts: ts + DEAD_DEVICE_TIMEOUT.as_millis() as i64,
                             id: id.to_string(),
@@ -230,7 +213,7 @@ impl Storage for InMemoryStorage {
                             let mut txs = txs_c.write().await;
                             txs.retain(|tx| !tx.is_closed());
                         }
-                        oldest_ts = ts;
+                        oldest_ts = end;
                     }
                 }
 

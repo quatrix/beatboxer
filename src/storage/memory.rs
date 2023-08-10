@@ -74,6 +74,7 @@ impl Storage for InMemoryStorage {
             };
 
             self.events.store_event(event.clone()).await;
+            self.notification_dispatcher.notify(&event).await;
         }
     }
 

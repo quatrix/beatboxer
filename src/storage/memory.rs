@@ -19,7 +19,7 @@ use super::Storage;
 use anyhow::Result;
 use axum::async_trait;
 use postcard::to_allocvec;
-use tokio::sync::{mpsc::Receiver, RwLock};
+use tokio::sync::mpsc::Receiver;
 use tracing::info;
 
 mod events;
@@ -27,7 +27,7 @@ mod zset;
 
 pub struct InMemoryStorage {
     keep_alives: Arc<ZSet>,
-    events: Arc<RwLock<Events>>,
+    events: Arc<Events>,
     notification_dispatcher: Arc<NotificationDispatcher>,
     max_history_size: usize,
 }
@@ -36,7 +36,7 @@ impl InMemoryStorage {
     pub fn new(max_history_size: usize) -> Self {
         Self {
             keep_alives: Arc::new(ZSet::new()),
-            events: Arc::new(RwLock::new(Events::new(max_history_size))),
+            events: Arc::new(Events::new(max_history_size)),
             notification_dispatcher: Arc::new(NotificationDispatcher::new()),
             max_history_size,
         }
@@ -47,8 +47,7 @@ impl InMemoryStorage {
     }
 
     async fn events_since_ts(&self, ts: i64) -> Vec<Event> {
-        let events = self.events.read().await;
-        events.events_since_ts(ts)
+        self.events.events_since_ts(ts).await
     }
 }
 
@@ -68,15 +67,13 @@ impl Storage for InMemoryStorage {
         self.set_ka(id, ts).await;
 
         if is_connection_event {
-            let mut events = self.events.write().await;
             let event = Event {
                 ts,
                 id: id.to_string(),
                 typ: EventType::Connected,
             };
 
-            events.store_event(event.clone());
-            self.notification_dispatcher.notify(&event).await;
+            self.events.store_event(event.clone()).await;
         }
     }
 
@@ -88,8 +85,7 @@ impl Storage for InMemoryStorage {
     }
 
     async fn merge_events(&self, new_data: VecDeque<Event>) {
-        let mut events = self.events.write().await;
-        events.merge(&new_data);
+        self.events.merge(&new_data).await;
     }
 
     async fn serialize_state(&self) -> Result<Vec<u8>> {
@@ -105,16 +101,7 @@ impl Storage for InMemoryStorage {
     }
 
     async fn serialize_events(&self) -> Result<Vec<u8>> {
-        let t0 = std::time::Instant::now();
-        let events = self.events.read().await;
-
-        let bin = to_allocvec(&events.events)?;
-        info!(
-            "Serialized state in {:.2} secs ({} keys)",
-            t0.elapsed().as_secs_f32(),
-            self.keep_alives.scores.len()
-        );
-        Ok(bin)
+        self.events.serialize().await
     }
 
     async fn subscribe(&self, offset: Option<i64>) -> Option<Receiver<Event>> {
@@ -169,11 +156,7 @@ impl Storage for InMemoryStorage {
                             typ: EventType::Dead,
                         };
 
-                        {
-                            let mut events = events_c.write().await;
-                            events.store_event(event.clone());
-                        }
-
+                        events_c.store_event(event.clone()).await;
                         notification_dispatcher.notify(&event).await;
                     }
                     oldest_ts = end;

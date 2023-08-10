@@ -5,9 +5,12 @@ use std::{
     time::Duration,
 };
 
-use crate::keep_alive::{
-    constants::DEAD_DEVICE_TIMEOUT,
-    types::{Event, EventType},
+use crate::{
+    keep_alive::{
+        constants::DEAD_DEVICE_TIMEOUT,
+        types::{Event, EventType},
+    },
+    notification_dispatcher::NotificationDispatcher,
 };
 
 use self::{events::Events, zset::ZSet};
@@ -16,15 +19,8 @@ use super::Storage;
 use anyhow::Result;
 use axum::async_trait;
 use postcard::to_allocvec;
-use tokio::sync::{
-    mpsc::{
-        self,
-        error::{SendError, TrySendError},
-        Receiver, Sender,
-    },
-    RwLock,
-};
-use tracing::{error, info};
+use tokio::sync::{mpsc::Receiver, RwLock};
+use tracing::info;
 
 mod events;
 mod zset;
@@ -32,7 +28,7 @@ mod zset;
 pub struct InMemoryStorage {
     keep_alives: Arc<ZSet>,
     events: Arc<RwLock<Events>>,
-    txs: Arc<RwLock<Vec<Sender<Event>>>>,
+    notification_dispatcher: Arc<NotificationDispatcher>,
     max_history_size: usize,
 }
 
@@ -41,7 +37,7 @@ impl InMemoryStorage {
         Self {
             keep_alives: Arc::new(ZSet::new()),
             events: Arc::new(RwLock::new(Events::new(max_history_size))),
-            txs: Arc::new(RwLock::new(Vec::new())),
+            notification_dispatcher: Arc::new(NotificationDispatcher::new()),
             max_history_size,
         }
     }
@@ -80,25 +76,7 @@ impl Storage for InMemoryStorage {
             };
 
             events.store_event(event.clone());
-            let mut gc_senders = false;
-
-            {
-                let txs = self.txs.read().await;
-                for tx in txs.iter() {
-                    match tx.send(event.clone()).await {
-                        Ok(_) => {}
-                        Err(SendError(e)) => {
-                            error!("(subscriber) error sending: {:?}", e);
-                            gc_senders = true;
-                        }
-                    }
-                }
-            }
-            if gc_senders {
-                info!("cleaninig dead subscribers");
-                let mut txs = self.txs.write().await;
-                txs.retain(|tx| !tx.is_closed());
-            }
+            self.notification_dispatcher.notify(&event).await;
         }
     }
 
@@ -140,18 +118,22 @@ impl Storage for InMemoryStorage {
     }
 
     async fn subscribe(&self, offset: Option<i64>) -> Option<Receiver<Event>> {
-        let (tx, rx) = mpsc::channel(self.max_history_size + 500_000);
+        let buffer_size = self.max_history_size + 500_000;
 
-        if let Some(offset) = offset {
-            for event in self.events_since_ts(offset).await {
-                tx.send(event).await.expect("can't event to tx");
+        let rx = match offset {
+            Some(offset) => {
+                let events = self.events_since_ts(offset).await;
+
+                self.notification_dispatcher
+                    .add_subscriber(buffer_size, Some(events))
+                    .await
             }
-        }
-
-        {
-            let mut txs = self.txs.write().await;
-            txs.push(tx);
-        }
+            None => {
+                self.notification_dispatcher
+                    .add_subscriber(buffer_size, None)
+                    .await
+            }
+        };
 
         Some(rx)
     }
@@ -159,7 +141,7 @@ impl Storage for InMemoryStorage {
     fn watch_for_updates(&self) {
         let keep_alives_c = Arc::clone(&self.keep_alives);
         let events_c = Arc::clone(&self.events);
-        let txs_c = Arc::clone(&self.txs);
+        let notification_dispatcher = Arc::clone(&self.notification_dispatcher);
 
         tokio::spawn(async move {
             let mut oldest_ts = std::time::SystemTime::now()
@@ -192,29 +174,7 @@ impl Storage for InMemoryStorage {
                             events.store_event(event.clone());
                         }
 
-                        let mut gc_senders = false;
-                        {
-                            let txs = txs_c.read().await;
-
-                            for tx in txs.iter() {
-                                match tx.try_send(event.clone()) {
-                                    Ok(_) => {}
-                                    Err(TrySendError::Closed(_)) => {
-                                        error!("(subscriber) Channel closed.");
-                                        gc_senders = true;
-                                    }
-                                    Err(TrySendError::Full(_)) => {
-                                        error!("(subscriber) Channel full.");
-                                    }
-                                }
-                            }
-                        }
-
-                        if gc_senders {
-                            info!("cleaninig dead subscribers");
-                            let mut txs = txs_c.write().await;
-                            txs.retain(|tx| !tx.is_closed());
-                        }
+                        notification_dispatcher.notify(&event).await;
                     }
                     oldest_ts = end;
                 }

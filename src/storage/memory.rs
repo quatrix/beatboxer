@@ -17,7 +17,11 @@ use anyhow::Result;
 use axum::async_trait;
 use postcard::to_allocvec;
 use tokio::sync::{
-    mpsc::{self, error::TrySendError, Receiver, Sender},
+    mpsc::{
+        self,
+        error::{SendError, TrySendError},
+        Receiver, Sender,
+    },
     RwLock,
 };
 use tracing::{error, info};
@@ -81,14 +85,11 @@ impl Storage for InMemoryStorage {
             {
                 let txs = self.txs.read().await;
                 for tx in txs.iter() {
-                    match tx.try_send(event.clone()) {
+                    match tx.send(event.clone()).await {
                         Ok(_) => {}
-                        Err(TrySendError::Closed(_)) => {
-                            error!("(subscriber) Channel closed.");
+                        Err(SendError(e)) => {
+                            error!("(subscriber) error sending: {:?}", e);
                             gc_senders = true;
-                        }
-                        Err(TrySendError::Full(_)) => {
-                            error!("(subscriber) Channel full.");
                         }
                     }
                 }

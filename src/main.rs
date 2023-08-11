@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let storage = get_storage(args.use_rocksdb, args.http_port);
 
-    storage.watch_for_updates();
+    storage.start_background_tasks();
 
     let keep_alive = Arc::new(KeepAlive::new(
         args.ka_sync_addr.clone(),

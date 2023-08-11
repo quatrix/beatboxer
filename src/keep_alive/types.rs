@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
@@ -34,4 +36,16 @@ pub struct Event {
     pub ts: i64,
     pub id: String,
     pub typ: EventType,
+}
+
+impl Ord for Event {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.ts, &self.id).cmp(&(other.ts, &other.id))
+    }
+}
+
+impl PartialOrd for Event {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }

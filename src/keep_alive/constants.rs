@@ -7,6 +7,7 @@ pub(crate) const SOCKET_READ_LONG_TIMEOUT: Duration = Duration::from_millis(1000
 pub(crate) const LAST_PONG_TIMEOUT: Duration = Duration::from_millis(10000);
 
 pub(crate) const DEAD_DEVICE_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const CONSOLIDATION_WINDOW: Duration = Duration::from_secs(2);
 
 pub fn is_dead(ts: i64) -> bool {
     let now = std::time::SystemTime::now()

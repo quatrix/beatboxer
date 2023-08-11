@@ -1,34 +1,39 @@
 use anyhow::Result;
 use postcard::to_allocvec;
-use std::collections::{HashSet, VecDeque};
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::keep_alive::types::Event;
 
 pub struct Events {
-    pub max_history_size: usize,
-    pub events: RwLock<VecDeque<Event>>,
+    max_history_size: usize,
+    events: Arc<RwLock<VecDeque<Event>>>,
 }
 
 impl Events {
     pub fn new(max_history_size: usize) -> Self {
+        if max_history_size == 0 {
+            panic!("max_history_size can't be 0")
+        }
+
         Self {
             max_history_size,
-            events: RwLock::new(VecDeque::new()),
+            events: Arc::new(RwLock::new(VecDeque::new())),
         }
     }
 
     pub async fn store_event(&self, event: Event) {
-        if self.max_history_size == 0 {
-            return;
-        }
-
         let mut events = self.events.write().await;
-        events.push_back(event);
+
+        events.push_back(event.clone());
 
         if events.len() > self.max_history_size {
-            let _ = events.pop_front();
+            let overflow = events.len() - self.max_history_size;
+            let _ = events.drain(0..overflow);
         }
     }
 
@@ -86,7 +91,7 @@ fn merge_without_duplicates(a: &VecDeque<Event>, b: &VecDeque<Event>) -> VecDequ
         }
     }
 
-    result.make_contiguous().sort_by(|a, b| a.ts.cmp(&b.ts));
+    result.make_contiguous().sort();
 
     result
 }
@@ -95,6 +100,70 @@ fn merge_without_duplicates(a: &VecDeque<Event>, b: &VecDeque<Event>) -> VecDequ
 mod test {
     use super::*;
     use crate::keep_alive::types::{Event, EventType};
+
+    #[tokio::test]
+    async fn test_getting_events_since_some_ts() {
+        let e0 = Events::new(10);
+
+        let all_events = vec![
+            Event {
+                ts: 10,
+                id: "hey".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 20,
+                id: "ho".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 30,
+                id: "lets".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 40,
+                id: "go".to_string(),
+                typ: EventType::Connected,
+            },
+        ];
+
+        for event in &all_events {
+            e0.store_event(event.clone()).await;
+        }
+
+        assert_eq!(e0.events_since_ts(20).await, all_events[1..]);
+        assert_eq!(e0.events_since_ts(0).await, all_events);
+    }
+
+    #[tokio::test]
+    async fn test_storing_multiple_events_with_the_same_ts() {
+        let e0 = Events::new(5);
+
+        let all_events = vec![
+            Event {
+                ts: 10,
+                id: "hey".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 10,
+                id: "ho".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 10,
+                id: "lets".to_string(),
+                typ: EventType::Connected,
+            },
+        ];
+
+        for event in &all_events {
+            e0.store_event(event.clone()).await;
+        }
+
+        assert_eq!(e0.events_since_ts(0).await, all_events);
+    }
 
     #[tokio::test]
     async fn test_merging_two_identical_events_lists() {

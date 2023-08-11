@@ -1,4 +1,5 @@
 pub mod client;
+pub mod cluster_status;
 pub mod constants;
 pub mod server;
 pub mod types;
@@ -12,6 +13,7 @@ use axum::async_trait;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
+use crate::keep_alive::cluster_status::ClusterStatus;
 use crate::storage::Storage;
 
 use self::{
@@ -26,6 +28,7 @@ pub struct KeepAlive {
     nodes: Vec<String>,
     keep_alives: Arc<dyn Storage + Send + Sync>,
     txs: SenderChannels,
+    cluster_status: Arc<ClusterStatus>,
 }
 
 #[async_trait]
@@ -33,6 +36,8 @@ pub trait KeepAliveTrait {
     async fn pulse(&self, id: &str);
     async fn get(&self, id: &str) -> Option<i64>;
     async fn subscribe(&self, offset: Option<i64>) -> Result<Receiver<Event>>;
+    async fn is_ready(&self) -> bool;
+    async fn cluster_status(&self) -> &ClusterStatus;
 }
 
 impl KeepAlive {
@@ -43,9 +48,10 @@ impl KeepAlive {
     ) -> KeepAlive {
         KeepAlive {
             server_addr,
-            nodes,
+            nodes: nodes.clone(),
             keep_alives: storage,
             txs: Arc::new(RwLock::new(Vec::new())),
+            cluster_status: Arc::new(ClusterStatus::new(nodes)),
         }
     }
 
@@ -132,5 +138,13 @@ impl KeepAliveTrait for KeepAlive {
 
     async fn subscribe(&self, offset: Option<i64>) -> Result<Receiver<Event>> {
         self.keep_alives.subscribe(offset).await
+    }
+
+    async fn is_ready(&self) -> bool {
+        self.cluster_status.is_ready()
+    }
+
+    async fn cluster_status(&self) -> &ClusterStatus {
+        &self.cluster_status
     }
 }

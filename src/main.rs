@@ -14,7 +14,7 @@ use tokio::sync::mpsc::Receiver;
 
 use axum::{
     extract::{ws::WebSocket, Path, Query, State, WebSocketUpgrade},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     middleware,
     response::IntoResponse,
     routing::{get, post},
@@ -88,6 +88,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/updates", get(ws_handler))
         .route("/metrics", get(move || ready(recorder_handle.render())))
         .route("/ping", get(ping_handler))
+        .route("/ready", get(ready_handler))
+        .route("/cluster_status", get(cluster_status_handler))
         .with_state(cloned_keep_alive);
 
     let addr = format!("{}:{}", args.http_host, args.http_port)
@@ -168,4 +170,24 @@ async fn handle_socket(
             }
         }
     }
+}
+
+async fn ready_handler(
+    State(keep_alive): State<Arc<dyn KeepAliveTrait + Send + Sync>>,
+) -> impl IntoResponse {
+    if keep_alive.is_ready().await {
+        (StatusCode::OK, "READY")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "NOT READY")
+    }
+}
+
+async fn cluster_status_handler(
+    State(keep_alive): State<Arc<dyn KeepAliveTrait + Send + Sync>>,
+) -> impl IntoResponse {
+    let cs = keep_alive.cluster_status().await;
+    let r = serde_json::to_string(cs).unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", "application/json".parse().unwrap());
+    (headers, r)
 }

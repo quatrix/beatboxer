@@ -1,4 +1,5 @@
 use crate::keep_alive::{
+    cluster_status::NodeStatus,
     constants::{SOCKET_READ_LONG_TIMEOUT, SOCKET_WRITE_TIMEOUT},
     types::Event,
 };
@@ -64,6 +65,8 @@ impl KeepAlive {
     pub fn connect_to_nodes(&self) {
         for addr in self.nodes.clone() {
             let kac = Arc::clone(&self.keep_alives);
+            let cluster_status = Arc::clone(&self.cluster_status);
+
             tokio::spawn(async move {
                 loop {
                     info!("Connecting to {}", addr);
@@ -117,6 +120,8 @@ impl KeepAlive {
                                 };
 
                             kac.merge_events(events).await;
+                            cluster_status.set_node_status(addr.clone(), NodeStatus::Synched);
+                            cluster_status.update_last_sync(addr.clone());
 
                             info!("[{}] Synched. listening on updates...", addr);
 
@@ -193,12 +198,14 @@ impl KeepAlive {
                                         error!("[{}] Error writing PONG to socket: {}", addr, e);
                                         break;
                                     }
+                                    cluster_status.update_last_ping(addr.clone());
                                 } else {
                                     error!("[{}] Got unexpected command: {})", addr, line);
                                 }
                             }
                         }
                         Err(e) => {
+                            cluster_status.set_node_status(addr.clone(), NodeStatus::Dead);
                             error!("[{}] Error connecting: {}, trying again...", addr, e);
                             tokio::time::sleep(Duration::from_secs(1)).await;
                         }

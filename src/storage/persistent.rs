@@ -77,7 +77,7 @@ impl Storage for PersistentStorage {
     }
 
     async fn merge_events(&self, _new_data: VecDeque<Event>) {}
-    async fn subscribe(&self, _offset: Option<i64>) -> Option<Receiver<Event>> {
-        None
+    async fn subscribe(&self, _offset: Option<i64>) -> Result<Receiver<Event>> {
+        todo!("not implemented")
     }
 }

@@ -3,6 +3,7 @@ pub mod constants;
 pub mod server;
 pub mod types;
 
+use anyhow::Result;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc::{error::TrySendError, Receiver, Sender};
 
@@ -31,7 +32,7 @@ pub struct KeepAlive {
 pub trait KeepAliveTrait {
     async fn pulse(&self, id: &str);
     async fn get(&self, id: &str) -> Option<i64>;
-    async fn subscribe(&self, offset: Option<i64>) -> Option<Receiver<Event>>;
+    async fn subscribe(&self, offset: Option<i64>) -> Result<Receiver<Event>>;
 }
 
 impl KeepAlive {
@@ -70,6 +71,7 @@ impl KeepAlive {
                             }
                             Err(TrySendError::Full(_)) => {
                                 error!("[{}] (ping) Channel full.", addr);
+                                metrics::increment_counter!("channel_full", "op" => "ping", "addr" => addr.clone());
                             }
                         };
                     }
@@ -120,12 +122,15 @@ impl KeepAliveTrait for KeepAlive {
             match tx.try_send(Message::KeepAliveUpdate(ka.clone())) {
                 Ok(_) => {}
                 Err(TrySendError::Closed(_)) => error!("[{}] (KA) Channel closed.", addr),
-                Err(TrySendError::Full(_)) => error!("[{}] (KA) Channel full.", addr),
+                Err(TrySendError::Full(_)) => {
+                    error!("[{}] (KA) Channel full.", addr);
+                    metrics::increment_counter!("channel_full", "op" => "ka", "addr" => addr.clone());
+                }
             }
         }
     }
 
-    async fn subscribe(&self, offset: Option<i64>) -> Option<Receiver<Event>> {
+    async fn subscribe(&self, offset: Option<i64>) -> Result<Receiver<Event>> {
         self.keep_alives.subscribe(offset).await
     }
 }

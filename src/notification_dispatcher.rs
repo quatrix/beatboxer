@@ -1,7 +1,8 @@
+use anyhow::Result;
 use std::sync::Arc;
 
 use tokio::sync::{
-    mpsc::{self, error::SendError, Receiver, Sender},
+    mpsc::{self, error::TrySendError, Receiver, Sender},
     RwLock,
 };
 use tracing::{error, info};
@@ -23,12 +24,27 @@ impl NotificationDispatcher {
         &self,
         buffer_size: usize,
         initial_payload: Option<Vec<Event>>,
-    ) -> Receiver<Event> {
+    ) -> Result<Receiver<Event>> {
         let (tx, rx) = mpsc::channel(buffer_size);
 
         if let Some(events) = initial_payload {
             for event in events {
-                tx.send(event).await.expect("can't event to tx");
+                match tx.try_send(event) {
+                    Ok(_) => {}
+                    Err(TrySendError::Closed(_)) => {
+                        error!("(subscriber-init) Channel closed.");
+                        return Err(anyhow::Error::msg(
+                            "channel closed while doing initial send",
+                        ));
+                    }
+                    Err(TrySendError::Full(_)) => {
+                        error!("(subscriber-init) Channel full.");
+                        metrics::increment_counter!("channel_full", "op" => "notify-init");
+                        return Err(anyhow::Error::msg(
+                            "channel got full while doing initial send",
+                        ));
+                    }
+                }
             }
         }
         {
@@ -36,7 +52,7 @@ impl NotificationDispatcher {
             txs.push(tx);
         }
 
-        rx
+        Ok(rx)
     }
 
     pub async fn notify(&self, event: &Event) {
@@ -45,11 +61,15 @@ impl NotificationDispatcher {
         {
             let txs = self.txs.read().await;
             for tx in txs.iter() {
-                match tx.send(event.clone()).await {
+                match tx.try_send(event.clone()) {
                     Ok(_) => {}
-                    Err(SendError(e)) => {
-                        error!("(subscriber) error sending: {:?}", e);
+                    Err(TrySendError::Closed(_)) => {
+                        error!("(subscriber) Channel closed.");
                         gc_senders = true;
+                    }
+                    Err(TrySendError::Full(e)) => {
+                        error!("(subscriber) Channel full. dropping event {:?}", e);
+                        metrics::increment_counter!("channel_full", "op" => "notify");
                     }
                 }
             }

@@ -138,10 +138,9 @@ async fn ws_handler(
     Query(params): Query<WsParams>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    if let Some(rx) = keep_alive.subscribe(params.offset).await {
-        ws.on_upgrade(move |socket| handle_socket(Arc::clone(&keep_alive), socket, rx))
-    } else {
-        panic!("can't get rx for updates")
+    match keep_alive.subscribe(params.offset).await {
+        Ok(rx) => ws.on_upgrade(move |socket| handle_socket(Arc::clone(&keep_alive), socket, rx)),
+        Err(e) => panic!("can't get rx for updates: {:?}", e),
     }
 }
 

@@ -15,6 +15,6 @@ pub trait Storage {
     async fn serialize_state(&self) -> Result<Vec<u8>>;
     async fn serialize_events(&self) -> Result<Vec<u8>>;
     async fn merge_events(&self, _new_data: VecDeque<Event>);
-    async fn subscribe(&self, _offset: Option<i64>) -> Option<Receiver<Event>>;
+    async fn subscribe(&self, _offset: Option<i64>) -> Result<Receiver<Event>>;
     fn start_background_tasks(&self) {}
 }

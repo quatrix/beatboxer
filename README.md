@@ -227,7 +227,7 @@ Each node exports a prometheus endpoint `/metrics` with HTTP times and messages 
 # What's missing
 1. Data compaction when sending `SYNC` between nodes.
 1. Getting peers from `etcd` / `consul`
-1. Add `/ready` readiness probe, to make the node *ready* only after it done the `SYNC`
 1. Some sort of a `COMMIT` mechanism for notification offsets, maybe long polling, maybe storing consumer group offsets like kafka?
-1. Currently notification history is `sorted + deduplicated` on `SYNC`, but still duplicate `DEAD` events are possible, need to implement reconciliation for events.
+1. event history reconciliation, if we get into a situation we have multiple `CONNECTED` events from the same id, we should just take the first one
+1. Move all the configuration from constant to proper config and allow stuff to come from env variables
 

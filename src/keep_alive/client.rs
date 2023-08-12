@@ -180,8 +180,7 @@ impl KeepAlive {
                                 }
                                 Err(e) => {
                                     error!("[{}] Failed to sync: {:?}", addr, e);
-                                    cluster_status
-                                        .set_node_status(&addr, NodeStatus::FailedSynched);
+                                    cluster_status.set_node_status(&addr, NodeStatus::SyncFailed);
                                     continue;
                                 }
                             }

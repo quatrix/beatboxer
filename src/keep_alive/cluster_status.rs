@@ -7,7 +7,7 @@ use serde::Serialize;
 pub enum NodeStatus {
     Initializing,
     Synched,
-    FailedSynched,
+    SyncFailed,
     Dead,
 }
 

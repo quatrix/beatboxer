@@ -132,7 +132,7 @@ sequenceDiagram
 1. `node1` sends `SYNC` to `node3`
 1. `node2` sends full state update (dump) to `node1`
 1. `node3` sends full state update (dump) to `node1`
-1. `node3` now forawrds the update about `bar` that it kept between `node1` being connected and `node1` being synched
+1. `node3` now forwards the update about `bar` that it kept between `node1` being connected and `node1` being synched
 
 # Keep alives between nodes
 ```mermaid
@@ -160,17 +160,56 @@ After the initial `SYNC-STATE`, every node starts sending `PING` to all the node
 
 # Readiness
 
-It's not clear at which stage to become ready. 
-1. A node should become ready after it has `SYNC`ed with all the peers that are alive.
-1. But if we assume nodes are mostly up-to-date, then a `SYNC` with any of the nodes should be enough
-1. Another option is to try to `SYNC` with all peers, and become ready if one of the following happens: `SYNC` success with all nodes, or timeout of say `10s`
-1. Variation on that would be to first determine which peers are alive, and then to wait for a `SYNC` with all active peers.
+Each cluster node exposes a `GET /ready` endpoint that returns `200 OK` when node is ready to start serving. This endpoint intendant to be used as a `readiness probe` under a Kubernetes Service.
 
+
+The readiness heuristic works as follows:
+
+1. Each node has a configurable list of peers.
+1. When node starts, all peer status is set to `INITIALIZING`.
+1. The node attempts to connect to each peer.
+1. If node fails to connect to a peer, its status set to `DEAD`.
+1. If node connects to a peer but fails to sync, its status set to `SYNC_FAILED`.
+1. If sync is successful, its status is `SYNCHED`.
+
+A node is ready when all it's peers isn't in the `INITIALIZING` state, so either dead, synched, or failed sync.
+
+Note 1: in case of a failed sync, the node will disconnect from that peer and try connecting and synching again and again for ever.
+
+Note 2: The idea is that a node shouldn't accept http calls until it's done serving, but this isn't currently enforced unless the cluster running inside a k8s service.
+
+# Liveness
+
+Each cluster node exposes a `GET /ping` endpoint that returns `200 PONG` when node is alive. This endpoint intendant to be used as a `liveness probe` under a Kubernetes Service.
+
+# Cluster Status
+
+Each cluster node exposes a `GET /cluster_status` that returns information about the node and its peers:
+
+```json
+{
+  "up_since": "2023-08-12T14:36:47.061589Z",
+  "nodes": {
+    "127.0.0.1:5502": {
+      "status": "SYNCHED",
+      "status_since": "2023-08-12T14:36:48.065119Z",
+      "last_ping": "2023-08-12T21:11:04.265606Z",
+      "last_sync": "2023-08-12T14:36:48.065120Z"
+    },
+    "127.0.0.1:5501": {
+      "status": "SYNCHED",
+      "status_since": "2023-08-12T14:36:47.062256Z",
+      "last_ping": "2023-08-12T21:11:04.265359Z",
+      "last_sync": "2023-08-12T14:36:47.062256Z"
+    }
+  }
+}
+```
 
 # Limitations and potential problems
 
 1. Doing two `GET`s to two different instances doesn't guarantee the same result 
-1. In case of a long period of network partition nodes will go out of sync, this can be addressed by sending more frequent keep alives
+1. In case of a long period of network partition nodes will go out of sync, this can be addressed by sending more frequent keep alive messages.
 1. If for example you have 8 nodes and you have a network split between 6 and 2 of the nodes, if we implement peer discovery with `etcd` each node can know if it's in the majority group or not, and if not stop serving until it reconnects, because we don't have a external registry and if we're the `2` noes that don't see the `6` we can't know if it's because of a network thing or they're really down.
 1. It's not clear what the effect of slowness in the replication, currently messages are being buffered, and we have a keep alive to kill dead nodes, but it's still something we should test.
 
@@ -186,9 +225,9 @@ Currently `beatboxer` supports an optional persistency to disk with `rocksdb`, t
 Each node exports a prometheus endpoint `/metrics` with HTTP times and messages latency between the nodes.
 
 # What's missing
-1. Data compection when sending `SYNC` between nodes.
+1. Data compaction when sending `SYNC` between nodes.
 1. Getting peers from `etcd` / `consul`
 1. Add `/ready` readiness probe, to make the node *ready* only after it done the `SYNC`
-1. Some sort of a `COMMIT` mechanism for notification offsets, maybe long polling, maybe storing consumer gorup offsets like kafka?
+1. Some sort of a `COMMIT` mechanism for notification offsets, maybe long polling, maybe storing consumer group offsets like kafka?
 1. Currently notification history is `sorted + deduplicated` on `SYNC`, but still duplicate `DEAD` events are possible, need to implement reconciliation for events.
 

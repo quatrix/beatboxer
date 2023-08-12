@@ -7,6 +7,7 @@ use serde::Serialize;
 pub enum NodeStatus {
     Initializing,
     Synched,
+    FailedSynched,
     Dead,
 }
 
@@ -61,21 +62,21 @@ impl ClusterStatus {
         true
     }
 
-    pub fn set_node_status(&self, node: String, new_status: NodeStatus) {
-        let mut m = self.nodes.get_mut(&node).unwrap();
+    pub fn set_node_status(&self, node: &str, new_status: NodeStatus) {
+        let mut m = self.nodes.get_mut(&node.to_string()).unwrap();
         let node = m.value_mut();
         node.status = new_status;
         node.status_since = Some(Utc::now());
     }
 
-    pub fn update_last_ping(&self, node: String) {
-        let mut m = self.nodes.get_mut(&node).unwrap();
+    pub fn update_last_ping(&self, node: &str) {
+        let mut m = self.nodes.get_mut(&node.to_string()).unwrap();
         let node = m.value_mut();
         node.last_ping = Some(Utc::now());
     }
 
-    pub fn update_last_sync(&self, node: String) {
-        let mut m = self.nodes.get_mut(&node).unwrap();
+    pub fn update_last_sync(&self, node: &str) {
+        let mut m = self.nodes.get_mut(&node.to_string()).unwrap();
         let node = m.value_mut();
         node.last_sync = Some(Utc::now());
     }

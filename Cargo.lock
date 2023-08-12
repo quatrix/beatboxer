@@ -233,6 +233,7 @@ dependencies = [
  "futures",
  "metrics",
  "metrics-exporter-prometheus",
+ "nom",
  "postcard",
  "prost",
  "rocksdb",

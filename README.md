@@ -49,13 +49,13 @@ The event type (DEAD) is the event type at the time when the event happened, the
 
 ## Offsets
 
-Currenly storing offsets isn't implemented and it's the client's responsibility. But it's probably a good idea to store them since we can probably treat them like timestamps and store them in the same distributed hashmap we're using for the heartbeats.
+Currently storing offsets isn't implemented and it's the client's responsibility. But it's probably a good idea to store them since we can probably treat them like timestamps and store them in the same distributed hashmap we're using for the heartbeats.
 
 Some options how to handle the offsets/commits (ideas):
 
 * The websocket consumer can send `COMMIT` messages every now and again, indicating it's done handling messages up to this point.
-* Long polling and `AUTO COMMIT`, client polls for new messages, and if enough time passed it's assumed the offset of the previous poll can be commited.
-* Something like the previous option but with websockets, if user continues to receive messages, assume older messages can be commited. 
+* Long polling and `AUTO COMMIT`, client polls for new messages, and if enough time passed it's assumed the offset of the previous poll can be committed.
+* Something like the previous option but with websockets, if user continues to receive messages, assume older messages can be committed. 
 
 # Constrains and Assumptions
 
@@ -72,12 +72,12 @@ Some options how to handle the offsets/commits (ideas):
 
 A simpler solution would be to just use Redis and slap a `REST` API on top of it. While a single Redis is great, it's still a single point of failure, and Redis-Cluster might introduce more unwanted complexity and moving parts.
 
-The above constains and assumptions make the problem of a distribution system easier:
+The above constrains and assumptions make the problem of a distribution system easier:
 
 1. The total size of the data is around 20MB (before any optimization), so we can easily send the whole state to a new node when it joins.
 1. If a node get multiple out of order updates about a device, it can always take the latest timestamp.
-1. It's ok to lose heartbearts now and then because another one is probably coming (every 10s)
-1. We have about 10s to finish sending an update from one node to the others because we can be stale up to 1 hearbeat from the last.
+1. It's ok to lose heartbeats now and then because another one is probably coming (every 10s)
+1. We have about 10s to finish sending an update from one node to the others because we can be stale up to 1 heartbeat from the last.
 
 # How?
 
@@ -86,6 +86,9 @@ The above constains and assumptions make the problem of a distribution system ea
 * The node taking the pulse generates the timestamp and sends to all other nodes
 * All nodes are connected to all other nodes
 * Since the values are timestamp, in case of conflicts last write wins. (highest timestamp)
+* Connected events are also by the master receiving the pulse and forwarded to all nodes
+* Dead events are decided by each node independently and are not replicated, but since they're derived from the same state, they should be identical on all nodes
+* Before events written to events history and consumers (via websocket) get notified, the events are stored in a buffer with some time delay - this allows enough time for events from other peers to arrive, the buffer is sorted (and should be reconciliated) before pushing to events history.
 
 ### Update Flow
 ```mermaid 
@@ -104,6 +107,9 @@ sequenceDiagram
 1. `node2` forwards the heartbeat to `node3`
 
 tl;dr a `node` will send updates to all other `nodes` connected to it.
+
+### Events History
+TBD
 
 ### New node joins
 ```mermaid 

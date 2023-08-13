@@ -12,7 +12,7 @@ use anyhow::Result;
 
 use nom::{
     bytes::complete::tag,
-    character::complete::{alpha1, alphanumeric1, digit1, space1},
+    character::complete::{alphanumeric1, digit1, space1},
     combinator::{map_res, recognize},
     sequence::Tuple,
     IResult,
@@ -101,12 +101,14 @@ async fn do_sync(
     Ok(())
 }
 
+#[derive(Debug, PartialEq)]
 struct KaCommand {
     id: String,
     ts: i64,
     is_connection_event: bool,
 }
 
+#[derive(Debug, PartialEq)]
 enum Command {
     KA(KaCommand),
     Ping,
@@ -246,5 +248,58 @@ impl KeepAlive {
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_cmd_ka_connected_event() {
+        let cmd = "KA foo123 1337 1";
+        assert_eq!(
+            parse_command(cmd),
+            Command::KA(KaCommand {
+                id: "foo123".to_string(),
+                ts: 1337,
+                is_connection_event: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_cmd_ka_not_connected_event() {
+        let cmd = "KA foo123 1337 0";
+        assert_eq!(
+            parse_command(cmd),
+            Command::KA(KaCommand {
+                id: "foo123".to_string(),
+                ts: 1337,
+                is_connection_event: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_cmd_ka_malformed() {
+        let cmd = "KA foo123 hey 0";
+        assert_eq!(
+            parse_command(cmd),
+            Command::ParseError(
+                "Parsing Error: Error { input: \"hey 0\", code: Digit }".to_string()
+            )
+        );
+    }
+    #[test]
+    fn test_ping() {
+        let cmd = "PING";
+        assert_eq!(parse_command(cmd), Command::Ping);
+    }
+
+    #[test]
+    fn test_unknown_command() {
+        let cmd = "VOVA666";
+        assert_eq!(parse_command(cmd), Command::Unknown("VOVA666".to_string()));
     }
 }

@@ -208,7 +208,7 @@ impl Storage for InMemoryStorage {
 
 #[cfg(test)]
 mod test {
-    use super::{Event, EventType, InMemoryStorage};
+    use super::InMemoryStorage;
     use crate::storage::Storage;
 
     #[tokio::test]

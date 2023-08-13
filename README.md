@@ -232,6 +232,18 @@ Currently `beatboxer` supports an optional persistency to disk with `rocksdb`, t
 
 Each node exports a prometheus endpoint `/metrics` with HTTP times and messages latency between the nodes.
 
+# Configuration 
+
+The following environment variables are used to set internal timeouts:
+
+* `SOCKET_WRITE_TIMEOUT_MS`:  writing to socket timeout - default 1s
+* `SOCKET_WRITE_LONG_TIMEOUT_MS`: writing big payload to socket - default 10s
+* `SOCKET_READ_LONG_TIMEOUT_MS`: reading from socket, large payload - default 10s
+* `LAST_PONG_TIMEOUT_MS`: duration between ping-pong to considered as timeout and disconnect node - default 10s
+* `DEAD_DEVICE_TIMEOUT_MS`: duration between heartbeats to consider device as `DEAD`
+* `CONSOLIDATION_WINDOW_MS`: how long to delay notification to consolidate out of order writes from other peer ndoes.
+
+
 # What's missing
 1. Data compaction when sending `SYNC` between nodes.
 1. Getting peers from `etcd` / `consul`

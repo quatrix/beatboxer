@@ -17,13 +17,13 @@ lazy_static! {
     pub static ref SOCKET_WRITE_TIMEOUT: Duration =
         from_env("SOCKET_WRITE_TIMEOUT_MS", Duration::from_secs(1));
     pub static ref SOCKET_WRITE_LONG_TIMEOUT: Duration =
-        from_env("SOCKET_WRITE_LONG_TIMEOUT", Duration::from_secs(10));
+        from_env("SOCKET_WRITE_LONG_TIMEOUT_MS", Duration::from_secs(10));
     pub static ref SOCKET_READ_LONG_TIMEOUT: Duration =
-        from_env("SOCKET_READ_LONG_TIMEOUT", Duration::from_secs(10));
+        from_env("SOCKET_READ_LONG_TIMEOUT_MS", Duration::from_secs(10));
     pub static ref LAST_PONG_TIMEOUT: Duration =
         from_env("LAST_PONG_TIMEOUT_MS", Duration::from_secs(10));
     pub static ref DEAD_DEVICE_TIMEOUT: Duration =
-        from_env("DEAD_DEVICE_TIMEOUT_MS", Duration::from_secs(10));
+        from_env("DEAD_DEVICE_TIMEOUT_MS", Duration::from_secs(20));
     pub static ref CONSOLIDATION_WINDOW: Duration =
         from_env("CONSOLIDATION_WINDOW_MS", Duration::from_secs(2));
 }

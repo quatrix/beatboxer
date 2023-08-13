@@ -24,7 +24,8 @@ use self::{
 type SenderChannels = Arc<RwLock<Vec<(String, Sender<Message>)>>>;
 
 pub struct KeepAlive {
-    server_addr: String,
+    listen_addr: String,
+    listen_port: u16,
     nodes: Vec<String>,
     keep_alives: Arc<dyn Storage + Send + Sync>,
     txs: SenderChannels,
@@ -40,14 +41,28 @@ pub trait KeepAliveTrait {
     async fn cluster_status(&self) -> &ClusterStatus;
 }
 
+fn remove_myself(nodes: Vec<String>, listen_port: u16) -> Vec<String> {
+    let mut nodes = nodes.clone();
+    let hostname = gethostname::gethostname().into_string().unwrap();
+    let myself = format!("{}:{}", hostname, listen_port);
+
+    nodes.retain(|n| *n != myself);
+
+    nodes
+}
+
 impl KeepAlive {
     pub fn new(
-        server_addr: String,
+        listen_addr: String,
+        listen_port: u16,
         nodes: Vec<String>,
         storage: Arc<dyn Storage + Send + Sync>,
     ) -> KeepAlive {
+        let nodes = remove_myself(nodes, listen_port);
+
         KeepAlive {
-            server_addr,
+            listen_addr,
+            listen_port,
             nodes: nodes.clone(),
             keep_alives: storage,
             txs: Arc::new(RwLock::new(Vec::new())),

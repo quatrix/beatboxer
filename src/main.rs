@@ -33,7 +33,10 @@ struct Args {
     http_port: u16,
 
     #[arg(short, long)]
-    ka_sync_addr: String,
+    listen_addr: String,
+
+    #[arg(short, long)]
+    listen_port: u16,
 
     #[arg(short, long)]
     nodes: Vec<String>,
@@ -70,7 +73,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     storage.start_background_tasks();
 
     let keep_alive = Arc::new(KeepAlive::new(
-        args.ka_sync_addr.clone(),
+        args.listen_addr,
+        args.listen_port,
         args.nodes.clone(),
         storage,
     ));
@@ -101,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Server running on http://{}", addr);
 
     tokio::select! {
-        _ = keep_alive.listen() => { }
+        Err(e) = keep_alive.listen() => { error!("got error while listen(): {:?}", e) }
         _ = http_server => { }
     };
 

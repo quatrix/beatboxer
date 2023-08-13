@@ -232,6 +232,23 @@ Currently `beatboxer` supports an optional persistency to disk with `rocksdb`, t
 
 Each node exports a prometheus endpoint `/metrics` with HTTP times and messages latency between the nodes.
 
+# Running
+
+```bash
+
+export H=`hostname`
+export RUST_LOG=beatboxer=info,info 
+
+# node 1
+cargo run --release -- --listen-addr 127.0.0.1  -n $H:5500 -n $H:5501 -n $H:5502 --http-port 8080 --listen-port 5500
+
+# node 2
+cargo run --release -- --listen-addr 127.0.0.1  -n $H:5500 -n $H:5501 -n $H:5502 --http-port 8081 --listen-port 5501
+
+# node 3
+cargo run --release -- --listen-addr 127.0.0.1  -n $H:5500 -n $H:5501 -n $H:5502 --http-port 8082 --listen-port 5502
+```
+
 # Configuration 
 
 The following environment variables are used to set internal timeouts:

@@ -43,8 +43,10 @@ async fn send_blob(
 
 impl KeepAlive {
     pub async fn listen(&self) -> Result<()> {
-        let listener = TcpListener::bind(&self.server_addr).await?;
-        info!("Listening on: {}", self.server_addr);
+        let server_addr = format!("{}:{}", self.listen_addr, self.listen_port);
+        eprintln!("ddd: {}", server_addr);
+        let listener = TcpListener::bind(&server_addr).await?;
+        info!("Listening on: {}", server_addr);
 
         self.health_checker();
 

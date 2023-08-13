@@ -88,3 +88,32 @@ impl Default for NotificationDispatcher {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::keep_alive::types::EventType;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_basics() {
+        let event = Event {
+            id: "vova666".to_string(),
+            ts: 1337,
+            typ: EventType::Connected,
+        };
+
+        let nd = NotificationDispatcher::new();
+
+        let mut rx0 = nd.add_subscriber(5, None).await.unwrap();
+        let mut rx1 = nd.add_subscriber(5, None).await.unwrap();
+
+        nd.notify(&event).await;
+
+        let actual0 = rx0.recv().await.unwrap();
+        let actual1 = rx1.recv().await.unwrap();
+
+        assert_eq!(actual0, event);
+        assert_eq!(actual1, event);
+    }
+}

@@ -231,6 +231,7 @@ dependencies = [
  "crossbeam-skiplist",
  "dashmap",
  "futures",
+ "lazy_static",
  "metrics",
  "metrics-exporter-prometheus",
  "nom",

@@ -28,8 +28,8 @@ async fn send_blob(
 
     let blob_len = format!("{}\n", blob.len());
 
-    let _ = timeout(SOCKET_WRITE_TIMEOUT, socket.write_all(blob_len.as_bytes())).await?;
-    let _ = timeout(SOCKET_WRITE_LONG_TIMEOUT, socket.write_all(blob)).await?;
+    let _ = timeout(*SOCKET_WRITE_TIMEOUT, socket.write_all(blob_len.as_bytes())).await?;
+    let _ = timeout(*SOCKET_WRITE_LONG_TIMEOUT, socket.write_all(blob)).await?;
 
     info!(
         "[{}] send blob {} took {:.2} sec",
@@ -126,12 +126,12 @@ impl KeepAlive {
                                     debug!("[{}] Sending Ping", addr);
                                     let elapsed_since_last_pong = last_pong.elapsed();
 
-                                    if elapsed_since_last_pong > LAST_PONG_TIMEOUT {
+                                    if elapsed_since_last_pong > *LAST_PONG_TIMEOUT {
                                         error!("[{}] Didn't see pong for a while ({:.2} secs), node is probably dead, closing socket.", addr, elapsed_since_last_pong.as_secs_f32());
                                         break;
                                     }
 
-                                    match timeout(SOCKET_WRITE_TIMEOUT, socket.write_all("PING\n".as_bytes())).await {
+                                    match timeout(*SOCKET_WRITE_TIMEOUT, socket.write_all("PING\n".as_bytes())).await {
                                         Ok(_) => {
                                             debug!("[{}] Sent PING to node", addr)
                                         }
@@ -144,7 +144,7 @@ impl KeepAlive {
                                 Message::KeepAliveUpdate(ka) => {
                                     let line = format!("KA {} {} {}\n", ka.id, ka.ts, ka.is_connection_event as u8);
                                     debug!("[{}] Sending KA '{}'", addr, line);
-                                    match timeout(SOCKET_WRITE_TIMEOUT, socket.write_all(line.as_bytes())).await {
+                                    match timeout(*SOCKET_WRITE_TIMEOUT, socket.write_all(line.as_bytes())).await {
                                         Ok(_) => {
                                             debug!("[{}] Sent KA to node", addr);
                                         }

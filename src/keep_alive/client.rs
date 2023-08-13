@@ -41,7 +41,7 @@ async fn read_blob<T: Clone + DeserializeOwned>(
     let t0 = std::time::Instant::now();
     let mut buf = String::new();
 
-    let _ = timeout(SOCKET_READ_LONG_TIMEOUT, socket.read_line(&mut buf)).await?;
+    let _ = timeout(*SOCKET_READ_LONG_TIMEOUT, socket.read_line(&mut buf)).await?;
 
     let blob_len = buf.trim().parse::<usize>()?;
 
@@ -49,7 +49,7 @@ async fn read_blob<T: Clone + DeserializeOwned>(
 
     info!("[{}] Getting {}... (size: {})", addr, tag, blob_len);
 
-    let _ = timeout(SOCKET_READ_LONG_TIMEOUT, socket.read_exact(&mut blob)).await?;
+    let _ = timeout(*SOCKET_READ_LONG_TIMEOUT, socket.read_exact(&mut blob)).await?;
 
     info!(
         "[{}] Got {} from. (size: {}) took: {:.2} secs",
@@ -73,7 +73,7 @@ async fn read_blob<T: Clone + DeserializeOwned>(
 }
 
 async fn write(socket: &mut BufReader<TcpStream>, msg: &[u8]) -> Result<()> {
-    let _ = timeout(SOCKET_WRITE_TIMEOUT, socket.write_all(msg)).await?;
+    let _ = timeout(*SOCKET_WRITE_TIMEOUT, socket.write_all(msg)).await?;
     Ok(())
 }
 

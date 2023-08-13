@@ -1,13 +1,32 @@
-use std::time::Duration;
+use lazy_static::lazy_static;
+use std::{env, time::Duration};
 
-pub(crate) const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_millis(1000);
-pub(crate) const SOCKET_WRITE_LONG_TIMEOUT: Duration = Duration::from_millis(10000);
-//pub(crate) const SOCKET_READ_TIMEOUT: Duration = Duration::from_millis(1000);
-pub(crate) const SOCKET_READ_LONG_TIMEOUT: Duration = Duration::from_millis(10000);
-pub(crate) const LAST_PONG_TIMEOUT: Duration = Duration::from_millis(10000);
+fn from_env(name: &str, default: Duration) -> Duration {
+    match env::var_os(name) {
+        Some(v) => Duration::from_millis(
+            v.into_string()
+                .unwrap()
+                .parse::<u64>()
+                .expect("{name} must be valid number"),
+        ),
+        None => default,
+    }
+}
 
-pub(crate) const DEAD_DEVICE_TIMEOUT: Duration = Duration::from_secs(20);
-pub(crate) const CONSOLIDATION_WINDOW: Duration = Duration::from_secs(2);
+lazy_static! {
+    pub static ref SOCKET_WRITE_TIMEOUT: Duration =
+        from_env("SOCKET_WRITE_TIMEOUT_MS", Duration::from_secs(1));
+    pub static ref SOCKET_WRITE_LONG_TIMEOUT: Duration =
+        from_env("SOCKET_WRITE_LONG_TIMEOUT", Duration::from_secs(10));
+    pub static ref SOCKET_READ_LONG_TIMEOUT: Duration =
+        from_env("SOCKET_READ_LONG_TIMEOUT", Duration::from_secs(10));
+    pub static ref LAST_PONG_TIMEOUT: Duration =
+        from_env("LAST_PONG_TIMEOUT_MS", Duration::from_secs(10));
+    pub static ref DEAD_DEVICE_TIMEOUT: Duration =
+        from_env("DEAD_DEVICE_TIMEOUT_MS", Duration::from_secs(10));
+    pub static ref CONSOLIDATION_WINDOW: Duration =
+        from_env("CONSOLIDATION_WINDOW_MS", Duration::from_secs(2));
+}
 
 pub fn is_dead(ts: i64) -> bool {
     let now = std::time::SystemTime::now()
@@ -15,5 +34,33 @@ pub fn is_dead(ts: i64) -> bool {
         .unwrap()
         .as_millis() as i64;
 
-    ts < (now - DEAD_DEVICE_TIMEOUT.as_millis() as i64)
+    let death_horizon = now - (DEAD_DEVICE_TIMEOUT.as_millis() as i64);
+    ts <= death_horizon
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_now_isnt_dead() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        assert!(!is_dead(now));
+    }
+
+    #[test]
+    fn test_past_is_dead() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        let past = now - (DEAD_DEVICE_TIMEOUT.as_millis() as i64);
+
+        assert!(is_dead(past));
+    }
 }

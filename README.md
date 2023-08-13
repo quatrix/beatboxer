@@ -1,5 +1,7 @@
 ![logo](/images/logo.png)
 
+![tests workflow](https://github.com/quatrix/beatboxer/actions/workflows/tests.yaml/badge.svg)
+
 Distributed heartbeat tracking service in Rust. 🦀
 
 ⚠️ This is a work in progress, don't use in production yet ⚠️

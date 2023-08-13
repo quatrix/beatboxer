@@ -182,7 +182,7 @@ impl Storage for InMemoryStorage {
     async fn subscribe(&self, offset: Option<i64>) -> Result<Receiver<Event>> {
         let buffer_size = self.max_history_size + 500_000;
 
-        let rx = match offset {
+        match offset {
             Some(offset) => {
                 let events = self.events_since_ts(offset).await;
 
@@ -195,9 +195,7 @@ impl Storage for InMemoryStorage {
                     .add_subscriber(buffer_size, None)
                     .await
             }
-        };
-
-        rx
+        }
     }
 
     fn start_background_tasks(&self) {

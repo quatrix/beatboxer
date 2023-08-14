@@ -28,21 +28,19 @@ Getting live updates about device `connecting` and `dying` (keep alives not rece
 The protocol format currently looks like this:
 
 ```
-1691517188570,a,CONNECTED,CONNECTED
-1691517189761,b,CONNECTED,CONNECTED
-1691517191344,c,CONNECTED,CONNECTED
-1691517208570,a,DEAD,DEAD
-1691517209761,b,DEAD,DEAD
-1691517211344,c,DEAD,DEAD
-1691517759461,d,CONNECTED,CONNECTED
-1691517779461,d,DEAD,CONNECTED
+1691517189761,foo,CONNECTED,CONNECTED
+1691517191344,bar,CONNECTED,CONNECTED
+1691517209761,foo,DEAD,DEAD
+1691517211344,bar,DEAD,DEAD
+1691517759461,baz,CONNECTED,CONNECTED
+1691517779461,baz,DEAD,CONNECTED
 ```
 
 Breakdown:
 
 ```
 1691517779461 - event timestamp
-d             - event device id (what sent to /pulse/)
+baz           - event device id (what sent to /pulse/)
 DEAD          - event type (DEAD/CONNECTED)
 CONNECTED     - current state (DEAD/CONNECTED/UNKNOWN)
 ```
@@ -111,7 +109,40 @@ sequenceDiagram
 tl;dr a `node` will send updates to all other `nodes` connected to it.
 
 ### Events History
-TBD
+```mermaid 
+sequenceDiagram
+    autonumber
+    participant Service
+    participant Node1
+    participant Peers
+    participant EventsBuffer
+    participant EventsHistory
+    participant Notifier
+    Service->>Node1: POST /pulse/foo
+    Node1->>Node1: Is Connected?
+    Node1->>Peers: KA "foo" 1690893373 1
+    Node1->>EventsBuffer: Event { "foo", 1690893373, CONNECTED}
+    Note over EventsBuffer: Events are stored in a sorted-set<br>Sorted by timestamp and id
+    EventsBuffer->>EventsBuffer: Are there events older than<br> <CONSOLIDATION_WINDOW>?
+    EventsBuffer->>EventsHistory: Event { "foo", 1690893373, CONNECTED}
+    EventsHistory->>Notifier: Event { "foo", 1690893373, CONNECTED}
+    Note over Node1: some time pass without heartbeats from "foo"
+    Node1->>EventsBuffer: Event { "foo", 1690913373, DEAD}
+    EventsBuffer->>EventsBuffer: Are there events older than<br> <CONSOLIDATION_WINDOW>?
+    EventsBuffer->>EventsHistory: Event { "foo", 1690913373 , DEAD}
+    EventsHistory->>Notifier: Event { "foo", 1690913373, DEAD}
+```
+1. Services sends a `POST` request to any of the nodes (in this case `Node1`) with the device id `foo`
+1. `Node1` checks if this is a connected events - first heartbeat seen from foo, or enough duration passed between the last heartbeat that it was considered dead and not it's connected again.
+1. `Node1` forwards the heartbeat and a flag if it's a connection event to all peers
+1. A `CONNECTED` event about foo is written to the `EventsBuffer` which is a sorted-set that keeps events sorted by their timestamps, this is important because each node constantly gets events from other peers and they might come out of order because of delays between nodes.
+1. Periodically the sorted set is checked for events that are older than the `CONSOLIDATION_WINDOW` 
+1. These events had enough time to sit in the buffer so any lagging events of that are in the past should have already arrived, these events are sorted again also by `id` so that the `EventHistory` looks the same on all nodes, after that the events are written to `EventsHistory`
+1. And once event hits EventsHistory it's also published to any current subscribers (currently via websockets).
+1. If after `DEAD_DEVICE_TIMEOUT` no new heartbeats arrive from `foo` it's then considered `DEAD` and a `DEAD` events is appended to the `EventsBuffer` - note that the dead events aren't forwarded to the other peers, it's assumed that since they all have the same state they should all arrive to the same conclusions about the dead-ness of nodes.
+1. The dead event sits in the buffer until enough time had passed.
+1. And then forwarded to `EventsHistory`,
+1. And from there notifies any subscribers.
 
 ### New node joins
 ```mermaid 

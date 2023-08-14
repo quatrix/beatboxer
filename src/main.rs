@@ -194,9 +194,9 @@ async fn ready_handler(
     State(keep_alive): State<Arc<dyn KeepAliveTrait + Send + Sync>>,
 ) -> impl IntoResponse {
     if keep_alive.is_ready().await {
-        (StatusCode::OK, "READY")
+        (StatusCode::OK, "OK")
     } else {
-        (StatusCode::SERVICE_UNAVAILABLE, "NOT READY")
+        (StatusCode::SERVICE_UNAVAILABLE, "Service Not Ready Yet")
     }
 }
 

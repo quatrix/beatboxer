@@ -6,8 +6,12 @@ use beatboxer::{
         KeepAlive, KeepAliveTrait,
     },
     metrics::{setup_metrics_recorder, track_metrics},
-    storage::{memory::InMemoryStorage, persistent::PersistentStorage, Storage},
+    storage::{memory::InMemoryStorage, Storage},
 };
+
+#[cfg(feature = "rocksdb")]
+use beatboxer::storage::persistent::PersistentStorage;
+
 use serde::Deserialize;
 use std::{future::ready, sync::Arc};
 use tokio::sync::mpsc::Receiver;
@@ -45,12 +49,22 @@ struct Args {
     use_rocksdb: bool,
 }
 
+#[cfg(feature = "rocksdb")]
 fn get_storage(use_rocksdb: bool, http_port: u16) -> Arc<dyn Storage + Sync + Send> {
     if use_rocksdb {
         Arc::new(PersistentStorage::new(&format!(
             "/tmp/beatboxer_{}.db",
             http_port
         )))
+    } else {
+        Arc::new(InMemoryStorage::default())
+    }
+}
+
+#[cfg(not(feature = "rocksdb"))]
+fn get_storage(use_rocksdb: bool, _http_port: u16) -> Arc<dyn Storage + Sync + Send> {
+    if use_rocksdb {
+        panic!("build with --features=rocksdb to use this feature")
     } else {
         Arc::new(InMemoryStorage::default())
     }

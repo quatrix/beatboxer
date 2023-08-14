@@ -5,6 +5,8 @@ use tokio::sync::mpsc::Receiver;
 
 use crate::keep_alive::types::Event;
 pub mod memory;
+
+#[cfg(feature = "rocksdb")]
 pub mod persistent;
 
 #[async_trait]

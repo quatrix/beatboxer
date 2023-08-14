@@ -108,7 +108,12 @@ sequenceDiagram
 
 tl;dr a `node` will send updates to all other `nodes` connected to it.
 
+Conflict Resolution: Nodes might get `KA` updates from other nodes out of order because of delays between the noes, in this case the conflict resolution is simple: since the data itself is a timestamp, a node will always store the biggest number, so if it got a ts 20, but it already stores ts 30, it will just drop the update.
+
+For events history conflict resolution is a bit tricker:
+
 ### Events History
+
 ```mermaid 
 sequenceDiagram
     autonumber

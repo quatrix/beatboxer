@@ -41,13 +41,36 @@ pub trait KeepAliveTrait {
     async fn cluster_status(&self) -> &ClusterStatus;
 }
 
+fn is_dev() -> bool {
+    // FIXME: this is a bit of a hack,
+    // if env variable IS_DEV is set, it means
+    // we're running on one machine, so the policy
+    // to remove myself is to look for hostname:port
+    //
+    // but if it's not IS_DEV then we remove nodes
+    // that starts with the hostname.
+    std::env::var_os("IS_DEV").is_some()
+}
+
 fn remove_myself(nodes: Vec<String>, listen_port: u16) -> Vec<String> {
     let mut nodes = nodes.clone();
     let hostname = gethostname::gethostname().into_string().unwrap();
-    let myself = format!("{}:{}", hostname, listen_port);
+    info!("node hostname: {}", hostname);
 
-    nodes.retain(|n| *n != myself);
+    if is_dev() {
+        let myself = format!("{}:{}", hostname, listen_port);
 
+        info!("is_dev: filtering out {}", myself);
+        nodes.retain(|n| *n != myself);
+    } else {
+        info!(
+            "isn't dev: filtering out node that starts with {}",
+            hostname
+        );
+        nodes.retain(|n| !n.starts_with(&hostname));
+    }
+
+    info!("peers: {:?}", nodes);
     nodes
 }
 

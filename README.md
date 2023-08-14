@@ -270,8 +270,11 @@ Each node exports a prometheus endpoint `/metrics` with HTTP times and messages 
 
 # Running
 
+To run a cluster locally (on dev machine)
+
 ```bash
 
+export IS_DEV=1
 export H=`hostname`
 export RUST_LOG=beatboxer=info,info 
 

@@ -153,9 +153,15 @@ impl Storage for InMemoryStorage {
     }
 
     async fn bulk_set(&self, new_data: HashMap<String, i64>) {
-        // FIXME: unoptimized, but used only on SYNC
+        let mut counter = 0;
+
         for (id, ts) in new_data {
+            counter += 1;
             self.set_ka(&id, ts).await;
+
+            if counter % 10000 == 0 {
+                tokio::task::yield_now().await;
+            }
         }
     }
 

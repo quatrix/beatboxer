@@ -1,5 +1,5 @@
 use crate::keep_alive::constants::{
-    LAST_PONG_TIMEOUT, SOCKET_WRITE_LONG_TIMEOUT, SOCKET_WRITE_TIMEOUT,
+    LAST_PONG_TIMEOUT, SOCKET_WRITE_LONG_TIMEOUT, SOCKET_WRITE_TIMEOUT, SYNC_TIMEOUT,
 };
 use crate::keep_alive::types::Message;
 
@@ -86,6 +86,12 @@ impl KeepAlive {
                             let state = kac.serialize_state().await.unwrap();
                             let events = kac.serialize_events().await.unwrap();
 
+                            info!(
+                                "[{}] serializing state + events took {:.2} sec",
+                                addr,
+                                t0.elapsed().as_secs_f32()
+                            );
+
                             if let Err(e) = send_blob("STATE", &mut socket, &addr, &state).await {
                                 error!("sending state blob failed: {:?}", e);
                                 break;
@@ -96,14 +102,41 @@ impl KeepAlive {
                                 break;
                             }
 
-                            info!(
-                                "[{}] SYNC end-to-end time {:.2} sec",
-                                addr,
-                                t0.elapsed().as_secs_f32()
-                            );
+                            let n = match timeout(*SYNC_TIMEOUT, socket.read(&mut buf)).await {
+                                Ok(r) => match r {
+                                    Ok(0) => {
+                                        info!("[{}] Socket closed.", addr);
+                                        break;
+                                    }
+                                    Ok(n) => n,
+                                    Err(e) => {
+                                        error!("[{}] Error reading from socket: {}", addr, e);
+                                        break;
+                                    }
+                                },
+                                Err(e) => {
+                                    error!("[{}] Timeout while reading from socket: {:?}", addr, e);
+                                    break;
+                                }
+                            };
 
-                            last_pong = Instant::now();
-                            already_synched = true;
+                            if n == 8 && buf[0..n] == *b"SYNCHED\n" {
+                                info!(
+                                    "[✅] [{}] SYNC end-to-end time {:.2} sec",
+                                    addr,
+                                    t0.elapsed().as_secs_f32()
+                                );
+
+                                last_pong = Instant::now();
+                                already_synched = true;
+                            } else {
+                                error!(
+                                    "[{}] Expecting to get SYNCHED but got something else {:?}",
+                                    addr,
+                                    &buf[0..n]
+                                );
+                                break;
+                            }
                         } else {
                             error!("[{}] Invalid command: {:?}", addr, &buf[0..n]);
                             continue;

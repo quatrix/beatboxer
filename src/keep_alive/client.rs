@@ -33,7 +33,7 @@ use tokio::{
 };
 use tracing::{error, info};
 
-async fn read_blob<T: Clone + DeserializeOwned>(
+async fn read_blob<T: Clone + DeserializeOwned + Send + Sync + 'static>(
     tag: &str,
     socket: &mut BufReader<TcpStream>,
     addr: &str,
@@ -60,7 +60,13 @@ async fn read_blob<T: Clone + DeserializeOwned>(
     );
 
     let t0 = std::time::Instant::now();
-    let blob: T = from_bytes(&blob)?;
+
+    let f = tokio::task::spawn_blocking(move || -> Result<T> {
+        let blob: T = from_bytes(&blob)?;
+        Ok(blob)
+    });
+
+    let blob = f.await?;
 
     info!(
         "[{}] Deserialized {} took: {:.2} secs",
@@ -69,7 +75,7 @@ async fn read_blob<T: Clone + DeserializeOwned>(
         t0.elapsed().as_secs_f32()
     );
 
-    Ok(blob)
+    blob
 }
 
 async fn write(socket: &mut BufReader<TcpStream>, msg: &[u8]) -> Result<()> {
@@ -82,22 +88,38 @@ async fn do_sync(
     socket: &mut BufReader<TcpStream>,
     kac: &Arc<dyn Storage + Send + Sync>,
 ) -> Result<()> {
-    info!("[{}] Sending SYNC reques", addr);
+    info!("[🔄] Sending SYNC request to {}...", addr);
+    let t_e2e_0 = std::time::Instant::now();
 
     write(socket, b"SYNC\n").await?;
     let ka = read_blob::<HashMap<String, i64>>("STATE", socket, addr).await?;
+    let events = read_blob::<VecDeque<Event>>("EVENTS", socket, addr).await?;
+
+    info!("[🔄] Got state + events from {}...", addr);
 
     let t0 = std::time::Instant::now();
     kac.bulk_set(ka).await;
-
     info!(
-        "[{}] Storing state took: {:.2} secs",
-        addr,
-        t0.elapsed().as_secs_f32()
+        "[💾] stored STATE. took {:.2} secs. from {}",
+        t0.elapsed().as_secs_f32(),
+        addr
     );
 
-    let events = read_blob::<VecDeque<Event>>("EVENTS", socket, addr).await?;
+    let t0 = std::time::Instant::now();
     kac.merge_events(events).await;
+    info!(
+        "[💾] stored EVENTS. took {:.2} secs. from {}",
+        t0.elapsed().as_secs_f32(),
+        addr
+    );
+
+    write(socket, b"SYNCHED\n").await?;
+
+    info!(
+        "[🔄✅] SYNC with {} done. (took {:.2})",
+        addr,
+        t_e2e_0.elapsed().as_secs_f32()
+    );
     Ok(())
 }
 

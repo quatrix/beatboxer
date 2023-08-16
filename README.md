@@ -191,6 +191,8 @@ sequenceDiagram
     Node1-->>Node3: SYNC
     Node2-->>Node1: STATE
     Node3-->>Node1: STATE
+    Node1-->>Node2: SYNCHED
+    Node1-->>Node3: SYNCHED
     Node2-->>Node1: PING
     Node1-->>Node2: PONG
     Node3-->>Node1: PING

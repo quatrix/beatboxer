@@ -20,6 +20,7 @@ lazy_static! {
         from_env("SOCKET_WRITE_LONG_TIMEOUT_MS", Duration::from_secs(10));
     pub static ref SOCKET_READ_LONG_TIMEOUT: Duration =
         from_env("SOCKET_READ_LONG_TIMEOUT_MS", Duration::from_secs(10));
+    pub static ref SYNC_TIMEOUT: Duration = from_env("SYNC_TIMEOUT_MS", Duration::from_secs(60));
     pub static ref LAST_PONG_TIMEOUT: Duration =
         from_env("LAST_PONG_TIMEOUT_MS", Duration::from_secs(10));
     pub static ref DEAD_DEVICE_TIMEOUT: Duration =

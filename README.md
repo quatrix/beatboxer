@@ -164,7 +164,9 @@ sequenceDiagram
     Node1-->>Node3: SYNC
     Node2-->>Node1: STATE
     Node3-->>Node1: STATE
+    Node1-->>Node3: SYNCHED
     Node3-->>Node1: KA "bar" 1690893373
+    Node1-->>Node2: SYNCHED
 ```
 
 `node1` joins the cluster
@@ -176,7 +178,9 @@ sequenceDiagram
 1. `node1` sends `SYNC` to `node3`
 1. `node2` sends full state update (dump) to `node1`
 1. `node3` sends full state update (dump) to `node1`
+1. `node1` merges the state from `node3` and sends `SYNCHED` to `node3`, now `node3` knows `node1` is ready to receive pings and updates.
 1. `node3` now forwards the update about `bar` that it kept between `node1` being connected and `node1` being synched
+1. `node3` merges the state from `node2` and sends `SYNCHED` to `node2`, now `node2` knows `node1` is ready to receive pings and updates.
 
 # Keep alives between nodes
 ```mermaid

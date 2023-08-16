@@ -138,6 +138,10 @@ impl Storage for InMemoryStorage {
         self.keep_alives.len()
     }
 
+    async fn is_empty(&self) -> bool {
+        self.keep_alives.len() == 0
+    }
+
     async fn get(&self, id: &str) -> Option<i64> {
         self.keep_alives.get(id)
     }

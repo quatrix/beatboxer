@@ -39,6 +39,10 @@ impl PersistentStorage {
 
 #[async_trait]
 impl Storage for PersistentStorage {
+    async fn len(&self) -> usize {
+        todo!("not implemented")
+    }
+
     async fn get(&self, id: &str) -> Option<i64> {
         match self.db.get(id) {
             Ok(Some(value)) => Some(i64::from_be_bytes(value.to_vec().try_into().unwrap())),

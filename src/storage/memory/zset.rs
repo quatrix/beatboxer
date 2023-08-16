@@ -22,6 +22,10 @@ impl ZSet {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.scores.len()
+    }
+
     pub fn get(&self, value: &str) -> Option<i64> {
         self.scores.get(value).map(|v| *v)
     }

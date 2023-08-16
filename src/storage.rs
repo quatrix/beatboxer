@@ -11,6 +11,10 @@ pub mod persistent;
 
 #[async_trait]
 pub trait Storage {
+    async fn len(&self) -> usize;
+    async fn is_empty(&self) -> bool {
+        self.len().await == 0
+    }
     async fn get(&self, id: &str) -> Option<i64>;
     async fn set(&self, id: &str, ts: i64, is_connection_event: bool);
     async fn bulk_set(&self, new_data: HashMap<String, i64>);

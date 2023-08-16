@@ -5,6 +5,7 @@ pub mod server;
 pub mod types;
 
 use anyhow::Result;
+use serde::Serialize;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc::{error::TrySendError, Receiver, Sender};
 
@@ -38,7 +39,18 @@ pub trait KeepAliveTrait {
     async fn get(&self, id: &str) -> Option<i64>;
     async fn subscribe(&self, offset: Option<i64>) -> Result<Receiver<Event>>;
     async fn is_ready(&self) -> bool;
-    async fn cluster_status(&self) -> &ClusterStatus;
+    async fn cluster_status(&self) -> ClusterStatusResponse;
+}
+
+#[derive(Serialize)]
+pub struct CurrentNode {
+    keys: usize,
+}
+
+#[derive(Serialize)]
+pub struct ClusterStatusResponse<'a> {
+    cluster_status: &'a ClusterStatus,
+    current_node: CurrentNode,
 }
 
 fn is_dev() -> bool {
@@ -182,7 +194,12 @@ impl KeepAliveTrait for KeepAlive {
         self.cluster_status.is_ready()
     }
 
-    async fn cluster_status(&self) -> &ClusterStatus {
-        &self.cluster_status
+    async fn cluster_status(&self) -> ClusterStatusResponse {
+        ClusterStatusResponse {
+            cluster_status: &self.cluster_status,
+            current_node: CurrentNode {
+                keys: self.keep_alives.len().await,
+            },
+        }
     }
 }

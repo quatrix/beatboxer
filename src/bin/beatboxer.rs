@@ -204,7 +204,7 @@ async fn cluster_status_handler(
     State(keep_alive): State<Arc<dyn KeepAliveTrait + Send + Sync>>,
 ) -> impl IntoResponse {
     let cs = keep_alive.cluster_status().await;
-    let r = serde_json::to_string(cs).unwrap();
+    let r = serde_json::to_string(&cs).unwrap();
     let mut headers = HeaderMap::new();
     headers.insert("Content-Type", "application/json".parse().unwrap());
     (headers, r)

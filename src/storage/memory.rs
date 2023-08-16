@@ -134,6 +134,10 @@ impl Default for InMemoryStorage {
 
 #[async_trait]
 impl Storage for InMemoryStorage {
+    async fn len(&self) -> usize {
+        self.keep_alives.len()
+    }
+
     async fn get(&self, id: &str) -> Option<i64> {
         self.keep_alives.get(id)
     }

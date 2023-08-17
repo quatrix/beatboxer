@@ -67,7 +67,7 @@ impl ZSet {
 
         for entry in self.elements.range(start..end) {
             let score = *entry.key();
-            let set_l = &*entry.value();
+            let set_l = entry.value();
 
             for element in set_l.iter() {
                 res.push((element.to_string(), score));

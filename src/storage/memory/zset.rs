@@ -1,11 +1,9 @@
-use std::{collections::HashSet, sync::RwLock};
-
 use crossbeam_skiplist::SkipMap;
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 
 pub struct ZSet {
     pub scores: DashMap<String, i64>,
-    elements: SkipMap<i64, RwLock<HashSet<String>>>,
+    elements: SkipMap<i64, DashSet<String>>,
 }
 
 impl Default for ZSet {
@@ -45,7 +43,7 @@ impl ZSet {
                 if let Some(set) = self.elements.get(old_score) {
                     // remove the old value from the set, and if the set is empty remove the whole
                     // set.
-                    let mut set_l = set.value().write().expect("couldn't get a lock");
+                    let set_l = set.value();
                     set_l.remove(value);
                     if set_l.is_empty() {
                         self.elements.remove(old_score);
@@ -58,11 +56,9 @@ impl ZSet {
             }
         };
 
-        let entry = self
-            .elements
-            .get_or_insert(score, RwLock::new(HashSet::new()));
+        let entry = self.elements.get_or_insert(score, DashSet::new());
 
-        let mut set_l = entry.value().write().expect("couldn't get lock");
+        let set_l = entry.value();
         set_l.insert(value.to_string());
     }
 
@@ -71,9 +67,9 @@ impl ZSet {
 
         for entry in self.elements.range(start..end) {
             let score = *entry.key();
-            let set_l = &*entry.value().read().expect("can't get read lock");
+            let set_l = &*entry.value();
 
-            for element in set_l {
+            for element in set_l.iter() {
                 res.push((element.to_string(), score));
             }
         }

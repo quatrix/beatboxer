@@ -88,7 +88,7 @@ fn remove_myself(nodes: Vec<String>, listen_port: u16) -> Vec<String> {
 
 impl KeepAlive {
     pub fn new(
-        listen_addr: String,
+        listen_addr: &str,
         listen_port: u16,
         nodes: Vec<String>,
         storage: Arc<dyn Storage + Send + Sync>,
@@ -96,7 +96,7 @@ impl KeepAlive {
         let nodes = remove_myself(nodes, listen_port);
 
         KeepAlive {
-            listen_addr,
+            listen_addr: listen_addr.to_string(),
             listen_port,
             nodes: nodes.clone(),
             keep_alives: storage,
@@ -200,6 +200,111 @@ impl KeepAliveTrait for KeepAlive {
             current_node: CurrentNode {
                 keys: self.keep_alives.len().await,
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{keep_alive::types::EventType, storage::memory::InMemoryStorage};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_pulse_stores_ka() {
+        let storage = Arc::new(InMemoryStorage::new(10));
+        let ka = KeepAlive::new("127.0.0.1", 6666, vec![], storage);
+
+        let id = "vova666";
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        assert!(ka.get(id).await.is_none());
+        ka.pulse("vova666").await;
+
+        let actual = ka.get(id).await.unwrap();
+
+        assert!(actual >= now);
+    }
+
+    #[tokio::test]
+    async fn test_pulse_publishes_to_all_txs() {
+        let storage = Arc::new(InMemoryStorage::new(10));
+        let ka = KeepAlive::new("127.0.0.1", 6666, vec![], storage);
+        let mut rxs = Vec::new();
+
+        rxs.push(ka.subscribe_to_commands("1.0.0.0:0".parse().unwrap()).await);
+        rxs.push(ka.subscribe_to_commands("2.0.0.0:0".parse().unwrap()).await);
+
+        let id = "vova666";
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        ka.pulse("vova666").await;
+
+        for mut rx in rxs {
+            let v = rx.recv().await.unwrap();
+            match v {
+                Message::KeepAliveUpdate(v) => {
+                    assert_eq!(v.id, id);
+                    assert!(v.ts >= now);
+                    assert!(v.is_connection_event);
+                }
+                _ => panic!("shouldn't get here"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pulse_publishes_events() {
+        let storage = Arc::new(InMemoryStorage::new(10));
+        storage.start_background_tasks();
+
+        let ka = KeepAlive::new("127.0.0.1", 6666, vec![], storage);
+        let mut events_rxs = Vec::new();
+
+        events_rxs.push(ka.subscribe(None).await.unwrap());
+        events_rxs.push(ka.subscribe(None).await.unwrap());
+
+        let id = "vova666";
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        ka.pulse("vova666").await;
+
+        for mut rx in events_rxs {
+            let event = rx.recv().await.unwrap();
+            assert_eq!(event.id, id);
+            assert!(event.ts >= now);
+            assert_eq!(event.typ, EventType::Connected);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_health_checks_sending_pings() {
+        let storage = Arc::new(InMemoryStorage::new(10));
+        let ka = KeepAlive::new("127.0.0.1", 6666, vec![], storage);
+        ka.health_checker();
+
+        let mut rxs = Vec::new();
+        rxs.push(ka.subscribe_to_commands("1.0.0.0:0".parse().unwrap()).await);
+        rxs.push(ka.subscribe_to_commands("2.0.0.0:0".parse().unwrap()).await);
+
+        for mut rx in rxs {
+            let v = rx.recv().await.unwrap();
+            match v {
+                Message::Ping => {}
+                _ => panic!("shouldn't get here"),
+            }
         }
     }
 }

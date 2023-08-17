@@ -39,6 +39,8 @@ impl PersistentStorage {
 
 #[async_trait]
 impl Storage for PersistentStorage {
+    fn start_background_tasks(&self) {}
+
     async fn len(&self) -> usize {
         todo!("not implemented")
     }

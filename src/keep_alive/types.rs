@@ -9,6 +9,7 @@ pub struct KeepAliveUpdate {
     pub is_connection_event: bool,
 }
 
+#[derive(Clone, Debug)]
 pub enum Message {
     Ping,
     KeepAliveUpdate(KeepAliveUpdate),

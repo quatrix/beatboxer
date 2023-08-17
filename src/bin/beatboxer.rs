@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     storage.start_background_tasks();
 
     let keep_alive = Arc::new(KeepAlive::new(
-        args.listen_addr,
+        &args.listen_addr,
         args.listen_port,
         args.nodes.clone(),
         storage,

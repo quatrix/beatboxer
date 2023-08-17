@@ -1,15 +1,19 @@
-use crate::keep_alive::constants::{
-    LAST_PONG_TIMEOUT, SOCKET_WRITE_LONG_TIMEOUT, SOCKET_WRITE_TIMEOUT, SYNC_TIMEOUT,
+use std::fmt::Write as _;
+
+use crate::keep_alive::{
+    constants::{LAST_PONG_TIMEOUT, SOCKET_WRITE_LONG_TIMEOUT, SOCKET_WRITE_TIMEOUT, SYNC_TIMEOUT},
+    types::Message,
 };
-use crate::keep_alive::types::Message;
+use crate::storage::Storage;
 
 use super::KeepAlive;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use arrayvec::ArrayString;
 use std::net::SocketAddr;
 use std::{sync::Arc, time::Instant};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, Receiver};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -42,9 +46,16 @@ async fn send_blob(
 }
 
 impl KeepAlive {
+    pub async fn subscribe_to_commands(&self, addr: SocketAddr) -> Receiver<Message> {
+        let (tx, rx) = mpsc::channel(102400);
+        let mut txs = self.txs.write().await;
+        txs.push((addr.to_string(), tx));
+
+        rx
+    }
+
     pub async fn listen(&self) -> Result<()> {
         let server_addr = format!("{}:{}", self.listen_addr, self.listen_port);
-        eprintln!("ddd: {}", server_addr);
         let listener = TcpListener::bind(&server_addr).await?;
         info!("Listening on: {}", server_addr);
 
@@ -54,14 +65,10 @@ impl KeepAlive {
             let (mut socket, addr) = listener.accept().await?;
             info!("[{}] Connected client!", addr);
 
-            let (tx, mut rx) = mpsc::channel(102400);
-            let mut txs = self.txs.write().await;
+            let mut rx = self.subscribe_to_commands(addr).await;
             let kac = Arc::clone(&self.keep_alives);
 
-            txs.push((addr.to_string(), tx));
-
             tokio::spawn(async move {
-                let mut buf = vec![0; 1024];
                 let mut already_synched = false;
                 let mut last_pong = Instant::now();
 
@@ -69,137 +76,137 @@ impl KeepAlive {
                     // first wait for a SYNC request
                     // to send a full sync of the current state
                     if !already_synched {
-                        let n = match socket.read(&mut buf).await {
-                            Ok(0) => {
-                                info!("[{}] Socket closed.", addr);
-                                break;
-                            }
-                            Ok(n) => n,
-                            Err(e) => {
-                                error!("[{}] Error reading from socket: {}", addr, e);
-                                break;
-                            }
-                        };
-
-                        if n == 5 && buf[0..n] == *b"SYNC\n" {
-                            let t0 = std::time::Instant::now();
-                            let state = kac.serialize_state().await.unwrap();
-                            let events = kac.serialize_events().await.unwrap();
-
-                            info!(
-                                "[{}] serializing state + events took {:.2} sec",
-                                addr,
-                                t0.elapsed().as_secs_f32()
-                            );
-
-                            if let Err(e) = send_blob("STATE", &mut socket, &addr, &state).await {
-                                error!("sending state blob failed: {:?}", e);
-                                break;
-                            }
-
-                            if let Err(e) = send_blob("EVENTS", &mut socket, &addr, &events).await {
-                                error!("sending events blob failed: {:?}", e);
-                                break;
-                            }
-
-                            let n = match timeout(*SYNC_TIMEOUT, socket.read(&mut buf)).await {
-                                Ok(r) => match r {
-                                    Ok(0) => {
-                                        info!("[{}] Socket closed.", addr);
-                                        break;
-                                    }
-                                    Ok(n) => n,
-                                    Err(e) => {
-                                        error!("[{}] Error reading from socket: {}", addr, e);
-                                        break;
-                                    }
-                                },
-                                Err(e) => {
-                                    error!("[{}] Timeout while reading from socket: {:?}", addr, e);
-                                    break;
-                                }
-                            };
-
-                            if n == 8 && buf[0..n] == *b"SYNCHED\n" {
-                                info!(
-                                    "[✅] [{}] SYNC end-to-end time {:.2} sec",
-                                    addr,
-                                    t0.elapsed().as_secs_f32()
-                                );
-
+                        match sync_with_client(&mut socket, &addr, &kac).await {
+                            Ok(_) => {
                                 last_pong = Instant::now();
                                 already_synched = true;
-                            } else {
-                                error!(
-                                    "[{}] Expecting to get SYNCHED but got something else {:?}",
-                                    addr,
-                                    &buf[0..n]
-                                );
+                            }
+                            Err(e) => {
+                                error!("[{}] got error while synching: {:?}", addr, e);
                                 break;
                             }
-                        } else {
-                            error!("[{}] Invalid command: {:?}", addr, &buf[0..n]);
-                            continue;
                         }
                     }
 
-                    tokio::select! {
-                        Ok(n) = socket.read(&mut buf) => {
-                            if n == 0 {
-                                info!("[{}] Client closed socket", addr);
-                                break;
-                            } else {
-                                // FIXME: for now we're not parsing the message
-                                // because it can only be PONG.
-                                last_pong = Instant::now();
-                            }
-                        },
-
-                        v = rx.recv() => match v {
-                            Some(message) => match message {
-                                Message::Ping => {
-                                    debug!("[{}] Sending Ping", addr);
-                                    let elapsed_since_last_pong = last_pong.elapsed();
-
-                                    if elapsed_since_last_pong > *LAST_PONG_TIMEOUT {
-                                        error!("[{}] Didn't see pong for a while ({:.2} secs), node is probably dead, closing socket.", addr, elapsed_since_last_pong.as_secs_f32());
-                                        break;
-                                    }
-
-                                    match timeout(*SOCKET_WRITE_TIMEOUT, socket.write_all("PING\n".as_bytes())).await {
-                                        Ok(_) => {
-                                            debug!("[{}] Sent PING to node", addr)
-                                        }
-                                        Err(e) => {
-                                            error!("[{}] Error writing PING to socket: {}", addr, e);
-                                            break;
-                                        }
-                                    }
-                                }
-                                Message::KeepAliveUpdate(ka) => {
-                                    let line = format!("KA {} {} {}\n", ka.id, ka.ts, ka.is_connection_event as u8);
-                                    debug!("[{}] Sending KA '{}'", addr, line);
-                                    match timeout(*SOCKET_WRITE_TIMEOUT, socket.write_all(line.as_bytes())).await {
-                                        Ok(_) => {
-                                            debug!("[{}] Sent KA to node", addr);
-                                        }
-                                        Err(e) => {
-                                            error!("[{}] Error writing KA to socket: {}", addr, e);
-                                            break;
-                                        }
-                                    }
-                                }
-                            },
-                            None => {
-                                error!("[{}] Error receiving from channel", addr);
-                                break;
-                            }
-                        }
+                    if let Err(e) =
+                        handle_client_commands(&mut socket, &addr, &mut last_pong, &mut rx).await
+                    {
+                        error!("[{}] got error while handling commands: {:?}", addr, e);
+                        break;
                     }
                 }
 
                 info!("[{}] Client disconnected", addr);
             });
         }
+    }
+}
+
+async fn handle_client_commands(
+    socket: &mut TcpStream,
+    addr: &SocketAddr,
+    last_pong: &mut Instant,
+    rx: &mut Receiver<Message>,
+) -> Result<()> {
+    let mut buf = vec![0; 100];
+
+    tokio::select! {
+        Ok(n) = socket.read(&mut buf) => {
+            if n == 0 {
+                info!("[{}] Client closed socket", addr);
+                Err(anyhow!("Client closed socket"))
+            } else {
+                // FIXME: for now we're not parsing the message
+                // because it can only be PONG.
+                *last_pong = Instant::now();
+                Ok(())
+            }
+        },
+
+        v = rx.recv() => match v {
+            Some(message) => match message {
+                Message::Ping => {
+                    debug!("[{}] Sending Ping", addr);
+                    let elapsed_since_last_pong = last_pong.elapsed();
+
+                    if elapsed_since_last_pong > *LAST_PONG_TIMEOUT {
+                        return Err(anyhow!("[{}] Didn't see pong for a while ({:.2} secs), node is probably dead, closing socket.", addr, elapsed_since_last_pong.as_secs_f32()));
+                    }
+
+                    let _ = timeout(*SOCKET_WRITE_TIMEOUT, socket.write_all("PING\n".as_bytes())).await?;
+                    Ok(())
+                }
+                Message::KeepAliveUpdate(ka) => {
+                    let mut write_buf = ArrayString::<64>::new();
+                    writeln!(write_buf, "KA {} {} {}", ka.id, ka.ts, ka.is_connection_event as u8)?;
+                    debug!("[{}] Sending KA '{}'", addr, write_buf);
+                    let _ = timeout(*SOCKET_WRITE_TIMEOUT, socket.write_all(write_buf.as_bytes())).await?;
+                    Ok(())
+                }
+            },
+            None => {
+                Err(anyhow!("[{}] Error receiving from channel", addr))
+            }
+        }
+    }
+}
+
+async fn sync_with_client(
+    socket: &mut TcpStream,
+    addr: &SocketAddr,
+    kac: &Arc<dyn Storage + Sync + Send>,
+) -> Result<()> {
+    let mut buf = vec![0; 100];
+    let n = socket.read(&mut buf).await?;
+
+    if n == 0 {
+        return Err(anyhow!("Client closed socket"));
+    }
+
+    if n == 5 && buf[0..n] == *b"SYNC\n" {
+        let t0 = std::time::Instant::now();
+        let state = kac.serialize_state().await?;
+        let events = kac.serialize_events().await?;
+
+        info!(
+            "[{}] serializing state + events took {:.2} sec",
+            addr,
+            t0.elapsed().as_secs_f32()
+        );
+
+        send_blob("STATE", socket, addr, &state).await?;
+        send_blob("EVENTS", socket, addr, &events).await?;
+
+        let n = timeout(*SYNC_TIMEOUT, socket.read(&mut buf)).await?;
+        let n = match n {
+            Ok(n) => n,
+            Err(e) => return Err(e.into()),
+        };
+
+        if n == 0 {
+            return Err(anyhow!("Client closed socket"));
+        }
+
+        if n == 8 && buf[0..n] == *b"SYNCHED\n" {
+            info!(
+                "[✅] [{}] SYNC end-to-end time {:.2} sec",
+                addr,
+                t0.elapsed().as_secs_f32()
+            );
+
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "[{}] Expecting to get SYNCHED but got something else {:?}",
+                addr,
+                &buf[0..n],
+            ))
+        }
+    } else {
+        Err(anyhow!(
+            "[{}] Invalid command at this stage, expecting SYNC: {:?}",
+            addr,
+            &buf[0..n]
+        ))
     }
 }

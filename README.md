@@ -367,4 +367,4 @@ $ cargo run --release --bin stress_test --featrues=stress_test -- -n localhost:8
 1. Some sort of a `COMMIT` mechanism for notification offsets, maybe long polling, maybe storing consumer group offsets like kafka?
 1. event history reconciliation, if we get into a situation we have multiple `CONNECTED` events from the same id, we should just take the first one
 1. While a node is in the process of synching, it could itself get a sync request and it would send out partial state - technically it's kind of fine because the requesting node will also ask from other nodes, but maybe something to consider.
-
+1. Refactor `health checker` logic so that it's a bit more advanced: for example when nodeA connects to nodeB as a client, getting updates from nodeB should count as health indication, not just when nodeB connects to nodeA as a server, and NodeA sends it pings. another thing is that a server will drop a client if the client isn't sending pong replies, but a client will not disconnect from a server unless some command times out - maybe all of that should be handles in one place that holds everything a node knows about other ndoes - maybe also the replication lag.

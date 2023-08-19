@@ -54,8 +54,11 @@ impl ClusterStatus {
         // we can start serving.
 
         for entry in self.nodes.iter() {
-            if entry.value().status == NodeStatus::Initializing {
-                return false;
+            match entry.value().status {
+                NodeStatus::Initializing | NodeStatus::SyncFailed => {
+                    return false;
+                }
+                NodeStatus::Dead | NodeStatus::Synched => {}
             }
         }
 
@@ -79,5 +82,56 @@ impl ClusterStatus {
         let mut m = self.nodes.get_mut(&node.to_string()).unwrap();
         let node = m.value_mut();
         node.last_sync = Some(Utc::now());
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_is_ready_when_all_nodes_are_synched() {
+        let cs = ClusterStatus::new(vec!["node_a".to_string(), "node_b".to_string()]);
+
+        // initially all nodes are Initializing, so cluster isn't ready
+        assert!(!cs.is_ready());
+
+        cs.set_node_status("node_a", NodeStatus::Synched);
+        cs.set_node_status("node_b", NodeStatus::Synched);
+
+        // when all nodes are sync, cluster is ready
+        assert!(cs.is_ready());
+    }
+
+    #[test]
+    fn test_is_ready_when_all_nodes_are_dead() {
+        let cs = ClusterStatus::new(vec!["node_a".to_string(), "node_b".to_string()]);
+
+        // initially all nodes are Initializing, so cluster isn't ready
+        assert!(!cs.is_ready());
+
+        cs.set_node_status("node_a", NodeStatus::Dead);
+        cs.set_node_status("node_b", NodeStatus::Dead);
+
+        // when all nodes are dead, cluster is ready
+        // because we're probably the only node
+        assert!(cs.is_ready());
+    }
+
+    #[test]
+    fn test_is_not_ready_when_some_nodes_fail_to_sync() {
+        let cs = ClusterStatus::new(vec!["node_a".to_string(), "node_b".to_string()]);
+
+        // initially all nodes are Initializing, so cluster isn't ready
+        assert!(!cs.is_ready());
+
+        cs.set_node_status("node_a", NodeStatus::Dead);
+        cs.set_node_status("node_b", NodeStatus::SyncFailed);
+
+        // when some nodes fail sync, it means they're alive
+        // but we can't for some reason sync with them
+        // it means we won't be getting this masters updates
+        // so our data will be partial, better to not be ready at all in this case.
+        assert!(!cs.is_ready());
     }
 }

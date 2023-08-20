@@ -197,6 +197,7 @@ impl KeepAlive {
                         Ok(socket) => {
                             let mut socket = BufReader::new(socket);
 
+                            cluster_status.set_node_status(&addr, NodeStatus::Synching);
                             match do_sync(&addr, &mut socket, &kac).await {
                                 Ok(_) => {
                                     cluster_status.set_node_status(&addr, NodeStatus::Synched);

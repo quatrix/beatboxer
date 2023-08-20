@@ -6,6 +6,7 @@ use serde::Serialize;
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum NodeStatus {
     Initializing,
+    Synching,
     Synched,
     SyncFailed,
     Dead,
@@ -55,7 +56,7 @@ impl ClusterStatus {
 
         for entry in self.nodes.iter() {
             match entry.value().status {
-                NodeStatus::Initializing | NodeStatus::SyncFailed => {
+                NodeStatus::Initializing | NodeStatus::Synching | NodeStatus::SyncFailed => {
                     return false;
                 }
                 NodeStatus::Dead | NodeStatus::Synched => {}

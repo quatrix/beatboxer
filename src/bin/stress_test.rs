@@ -1,4 +1,5 @@
 use clap::Parser;
+use kanal::Receiver;
 use tracing::{error, info, warn};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
@@ -33,24 +34,23 @@ struct Config {
     #[arg(long, default_value = "100")]
     check_workers: i32,
 
-    #[arg(long, default_value = "30000")]
-    pulses_per_worker: i32,
+    #[arg(long, default_value = "1000000")]
+    total_ids: i32,
 }
 
-const CHARSET: &str = "01234567890abcdef";
+//const CHARSET: &str = "01234567890abcdef";
+//let id = random_string::generate(14, CHARSET);
 
 struct Pulse {
     pub id: String,
     pub node: String,
 }
 
-async fn pulser(tx: kanal::AsyncSender<Pulse>, config: Arc<Config>) {
+async fn pulser(tx: kanal::AsyncSender<Pulse>, config: Arc<Config>, ids_rx: Receiver<String>) {
     let client = reqwest::Client::new();
 
-    for _i in 0..config.pulses_per_worker {
+    while let Ok(id) = ids_rx.recv() {
         let node = &config.nodes[rand::thread_rng().gen_range(0..config.nodes.len())];
-
-        let id = random_string::generate(14, CHARSET);
 
         if let Err(e) = client
             .post(format!("http://{node}/pulse/{id}"))
@@ -99,10 +99,6 @@ async fn get_ka(client: &Client, pulse: &Pulse, config: &Arc<Config>) -> Result<
                             if delta < 10000 {
                                 return Ok(ts);
                             } else {
-                                error!(
-                                    "delta too large, it's probably stale: {} ({})",
-                                    delta, pulse.id
-                                );
                                 tokio::time::sleep(Duration::from_millis(5)).await;
                                 continue;
                             }
@@ -134,8 +130,9 @@ async fn checker(
     rx: kanal::AsyncReceiver<Pulse>,
     hist: Arc<RwLock<Histogram>>,
     config: Arc<Config>,
-) {
+) -> i32 {
     let client = reqwest::Client::new();
+    let mut checked = 0;
 
     loop {
         match rx.recv().await {
@@ -151,15 +148,17 @@ async fn checker(
                     if let Err(e) = hist_r.increment(delta as u64, 1) {
                         error!("error incrementing hist: {:?} delta: {:?}", e, delta);
                     }
+
+                    checked += 1;
                 }
 
                 Err(e) => error!("got error: {:?}", e),
             },
             Err(kanal::ReceiveError::SendClosed) => {
-                return;
+                return checked;
             }
             Err(_e) => {
-                return;
+                return checked;
             }
         }
     }
@@ -275,6 +274,18 @@ async fn ws_client(
     events
 }
 
+fn generate_ids(_config: &Config) -> Receiver<String> {
+    let (tx, rx) = kanal::unbounded();
+
+    tokio::spawn(async move {
+        for i in 0..1_000_000 {
+            let _ = tx.send(format!("{:016x}", i));
+        }
+    });
+
+    rx
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
@@ -287,11 +298,11 @@ async fn main() {
         .init();
 
     let config = Arc::new(Config::parse());
-    let total_msgs = config.pulses_per_worker * config.pulse_workers;
 
     info!("starting stress test. config: {:?}", config);
 
-    let mut futures = Vec::new();
+    let mut pulses_futures = Vec::new();
+    let mut checkers_futures = Vec::new();
     let mut ws_futures = Vec::new();
     let mut stop_ws = Vec::new();
     let (tx, rx) = kanal::bounded_async(100);
@@ -305,34 +316,47 @@ async fn main() {
         ws_futures.push(tokio::spawn(ws_client(
             rx,
             format!("ws://{node}/updates"),
-            total_msgs,
+            config.total_ids,
         )));
 
         stop_ws.push(tx);
     }
 
+    let ids_rx = generate_ids(&config);
+
     for _ in 0..config.pulse_workers {
         let txc = tx.clone();
         let config = Arc::clone(&config);
-        futures.push(tokio::spawn(pulser(txc, config)));
+        pulses_futures.push(tokio::spawn(pulser(txc, config, ids_rx.clone())));
     }
 
     for _ in 0..config.check_workers {
         let rxc = rx.clone();
         let config = Arc::clone(&config);
-        futures.push(tokio::spawn(checker(rxc, Arc::clone(&hist), config)));
+        checkers_futures.push(tokio::spawn(checker(rxc, Arc::clone(&hist), config)));
     }
 
     drop(tx);
     drop(rx);
 
-    futures::future::join_all(futures).await;
+    futures::future::join_all(pulses_futures).await;
+    let checked = futures::future::join_all(checkers_futures).await;
+
+    let checked: i32 = checked
+        .into_iter()
+        .collect::<Result<Vec<i32>, JoinError>>()
+        .unwrap()
+        .iter()
+        .sum();
+
+    info!("checked ids count: {checked}");
+
     let td = t0.elapsed().as_secs_f64();
 
     info!(
         "request rate: {} (total messages: {})",
-        (total_msgs as f64) / td,
-        total_msgs
+        (checked as f64) / td,
+        checked,
     );
 
     let hist_r = hist.read().await;

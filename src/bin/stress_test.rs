@@ -360,14 +360,21 @@ async fn main() {
         .collect::<Result<Vec<Vec<String>>, JoinError>>()
         .unwrap();
 
+    for (i, events) in res.iter().enumerate() {
+        let filename = format!("/tmp/ws_{i}.events");
+        match fs::write(&filename, events.join("\n")) {
+            Ok(_) => info!("wrote events to {filename}"),
+            Err(e) => error!("can't write events to {filename}: {:?}", e),
+        };
+    }
+
     let iterator = res.adjacent_pairs();
 
-    info!("comparing the counters from ws clients");
+    info!("comparing the events from ws clients");
+
     for (a, b) in iterator {
         if a != b {
             error!("diff events");
-            fs::write("/tmp/file_a", a.join("\n")).expect("");
-            fs::write("/tmp/file_b", b.join("\n")).expect("");
         } else {
             info!("events are equal");
         }

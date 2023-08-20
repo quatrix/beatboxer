@@ -13,11 +13,11 @@ use beatboxer::{
 use beatboxer::storage::persistent::PersistentStorage;
 
 use serde::Deserialize;
-use std::{future::ready, sync::Arc};
+use std::{future::ready, net::SocketAddr, sync::Arc};
 use tokio::sync::mpsc::Receiver;
 
 use axum::{
-    extract::{ws::WebSocket, Path, Query, State, WebSocketUpgrade},
+    extract::{ws::WebSocket, ConnectInfo, Path, Query, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
     middleware,
     response::IntoResponse,
@@ -157,7 +157,10 @@ async fn ws_handler(
     State(keep_alive): State<Arc<dyn KeepAliveTrait + Send + Sync>>,
     Query(params): Query<WsParams>,
     ws: WebSocketUpgrade,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
+    info!("ws_connect from {addr}");
+
     match keep_alive.subscribe(params.offset).await {
         Ok(rx) => ws.on_upgrade(move |socket| handle_socket(Arc::clone(&keep_alive), socket, rx)),
         Err(e) => panic!("can't get rx for updates: {:?}", e),

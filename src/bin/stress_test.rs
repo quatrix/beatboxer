@@ -274,11 +274,12 @@ async fn ws_client(
     events
 }
 
-fn generate_ids(_config: &Config) -> Receiver<String> {
+fn generate_ids(config: &Config) -> Receiver<String> {
     let (tx, rx) = kanal::unbounded();
+    let total_ids = config.total_ids;
 
     tokio::spawn(async move {
-        for i in 0..1_000_000 {
+        for i in 0..total_ids {
             let _ = tx.send(format!("{:016x}", i));
         }
     });

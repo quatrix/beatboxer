@@ -12,12 +12,13 @@ use beatboxer::{
 #[cfg(feature = "rocksdb")]
 use beatboxer::storage::persistent::PersistentStorage;
 
+use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
-use std::{future::ready, sync::Arc};
+use std::{future::ready, net::SocketAddr, sync::Arc};
 use tokio::sync::mpsc::Receiver;
 
 use axum::{
-    extract::{ws::WebSocket, Path, Query, State, WebSocketUpgrade},
+    extract::{ws::WebSocket, ConnectInfo, Path, Query, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
     middleware,
     response::IntoResponse,
@@ -114,7 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse()
         .unwrap();
 
-    let http_server = axum::Server::bind(&addr).serve(app.into_make_service());
+    let http_server =
+        axum::Server::bind(&addr).serve(app.into_make_service_with_connect_info::<SocketAddr>());
 
     info!("Server running on http://{}", addr);
 
@@ -157,39 +159,74 @@ async fn ws_handler(
     State(keep_alive): State<Arc<dyn KeepAliveTrait + Send + Sync>>,
     Query(params): Query<WsParams>,
     ws: WebSocketUpgrade,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    info!("ws_connect!");
+    info!("ws_connect! {}", addr);
 
     match keep_alive.subscribe(params.offset).await {
-        Ok(rx) => ws.on_upgrade(move |socket| handle_socket(Arc::clone(&keep_alive), socket, rx)),
+        Ok(rx) => {
+            ws.on_upgrade(move |socket| handle_socket(Arc::clone(&keep_alive), socket, rx, addr))
+        }
         Err(e) => panic!("can't get rx for updates: {:?}", e),
     }
 }
 
 async fn handle_socket(
     keep_alive: Arc<dyn KeepAliveTrait + Send + Sync>,
-    mut socket: WebSocket,
+    socket: WebSocket,
     mut rx: Receiver<Event>,
+    who: SocketAddr,
 ) {
-    loop {
-        if let Some(event) = rx.recv().await {
-            let current_state = match keep_alive.get(&event.id).await {
-                Some(ts) if is_dead(ts) => EventType::Dead,
-                Some(_) => EventType::Connected,
-                None => EventType::Unknown,
-            };
+    let (mut sender, mut receiver) = socket.split();
 
-            let msg = axum::extract::ws::Message::Text(format!(
-                "{},{},{},{}",
-                event.ts, event.id, event.typ, current_state
-            ));
+    let mut send_task = tokio::spawn(async move {
+        loop {
+            if let Some(event) = rx.recv().await {
+                let current_state = match keep_alive.get(&event.id).await {
+                    Some(ts) if is_dead(ts) => EventType::Dead,
+                    Some(_) => EventType::Connected,
+                    None => EventType::Unknown,
+                };
 
-            if let Err(e) = socket.send(msg).await {
-                error!("error sending ws message: {:?}", e);
-                break;
+                let msg = axum::extract::ws::Message::Text(format!(
+                    "{},{},{},{}",
+                    event.ts, event.id, event.typ, current_state
+                ));
+
+                if let Err(e) = sender.send(msg).await {
+                    error!("error sending ws message to {}: {:?}", who, e);
+                    break;
+                }
             }
         }
+    });
+
+    let mut recv_task = tokio::spawn(async move {
+        while let Some(Ok(msg)) = receiver.next().await {
+            if let axum::extract::ws::Message::Close(_) = msg {
+                info!("client {} closed socket", who)
+            }
+        }
+    });
+
+    tokio::select! {
+        rv_a = (&mut send_task) => {
+            match rv_a {
+                Ok(_) => {}
+                Err(a) => error!("Error sending messages {:?}", a)
+            }
+            recv_task.abort();
+        },
+        rv_b = (&mut recv_task) => {
+            match rv_b {
+                Ok(_) => {}
+                Err(b) => error!("Error receiving messages {:?}", b)
+            }
+            send_task.abort();
+        }
     }
+
+    info!("Websocket context {} destroyed", who);
 }
 
 async fn ready_handler(

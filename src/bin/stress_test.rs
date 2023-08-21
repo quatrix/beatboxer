@@ -35,7 +35,7 @@ struct Config {
     check_workers: i32,
 
     #[arg(long, default_value = "1000000")]
-    total_ids: i32,
+    total_ids: usize,
 }
 
 //const CHARSET: &str = "01234567890abcdef";
@@ -167,7 +167,7 @@ async fn checker(
 async fn ws_client(
     mut rx: oneshot::Receiver<()>,
     ws_uri: String,
-    expected_pairs: i32,
+    expected_pairs: usize,
 ) -> Vec<String> {
     let mut waiting_death = HashMap::new();
     let mut connected_counter = HashMap::new();
@@ -230,8 +230,8 @@ async fn ws_client(
         }
     }
 
-    for id in ids {
-        let connected = match connected_counter.get(&id) {
+    for id in &ids {
+        let connected = match connected_counter.get(id) {
             Some(c) => c,
             None => {
                 issues += 1;
@@ -240,7 +240,7 @@ async fn ws_client(
             }
         };
 
-        let dead = match dead_counter.get(&id) {
+        let dead = match dead_counter.get(id) {
             Some(c) => c,
             None => {
                 issues += 1;
@@ -268,6 +268,16 @@ async fn ws_client(
         error!(
             "{} - oh no, got {} pairs, expected {}",
             ws_uri, pairs, expected_pairs
+        );
+    }
+
+    if ids.len() == expected_pairs {
+        info!("got the expected number of ids {}", ids.len());
+    } else {
+        error!(
+            "number of ids {} isn't what's expected {}",
+            ids.len(),
+            expected_pairs
         );
     }
 
@@ -350,7 +360,14 @@ async fn main() {
         .iter()
         .sum();
 
-    info!("checked ids count: {checked}");
+    if (checked as usize) == config.total_ids {
+        info!("checked ids count: {checked} as expected");
+    } else {
+        error!(
+            "checked ids count: {} != {} omg!",
+            checked, config.total_ids
+        );
+    }
 
     let td = t0.elapsed().as_secs_f64();
 
@@ -372,6 +389,7 @@ async fn main() {
         );
     }
 
+    // waiting for death
     tokio::time::sleep(Duration::from_secs(30)).await;
 
     for tx in stop_ws {

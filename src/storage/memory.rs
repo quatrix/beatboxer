@@ -215,6 +215,7 @@ impl Storage for InMemoryStorage {
     fn start_background_tasks(&self) {
         self.start_consolidator();
         self.watch_for_updates();
+        self.notification_dispatcher.monitor();
     }
 }
 

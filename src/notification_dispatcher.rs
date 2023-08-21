@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use tokio::sync::{
     mpsc::{self, error::TrySendError, Receiver, Sender},
@@ -80,6 +80,23 @@ impl NotificationDispatcher {
             let mut txs = self.txs.write().await;
             txs.retain(|tx| !tx.is_closed());
         }
+    }
+
+    pub fn monitor(&self) {
+        let txs = Arc::clone(&self.txs);
+
+        tokio::spawn(async move {
+            loop {
+                {
+                    let txs = txs.read().await;
+                    for tx in txs.iter() {
+                        let pressure = (tx.max_capacity() - tx.capacity()) as f64;
+                        metrics::gauge!("channel_pressure", pressure, "channel_type" => "ws");
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        });
     }
 }
 

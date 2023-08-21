@@ -117,7 +117,8 @@ impl KeepAlive {
                     let txs = txsc.read().await;
 
                     for (addr, sender) in txs.iter() {
-                        metrics::gauge!("channel_pressure", (sender.max_capacity()-sender.capacity()) as f64, "addr" => addr.to_string());
+                        let pressure = (sender.max_capacity() - sender.capacity()) as f64;
+                        metrics::gauge!("channel_pressure", pressure, "channel_type" => "server", "addr" => addr.to_string());
 
                         match sender.try_send(Message::Ping) {
                             Ok(_) => {}

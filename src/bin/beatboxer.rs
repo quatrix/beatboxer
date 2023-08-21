@@ -13,7 +13,7 @@ use beatboxer::{
 use beatboxer::storage::persistent::PersistentStorage;
 
 use serde::Deserialize;
-use std::{future::ready, net::SocketAddr, sync::Arc};
+use std::{future::ready, sync::Arc};
 use tokio::sync::mpsc::Receiver;
 
 use axum::{

@@ -9,8 +9,8 @@ use beatboxer::{
     storage::{memory::InMemoryStorage, Storage},
 };
 
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+//#[global_allocator]
+//static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 #[cfg(feature = "rocksdb")]
 use beatboxer::storage::persistent::PersistentStorage;

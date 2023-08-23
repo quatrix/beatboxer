@@ -42,13 +42,12 @@ impl ZSet {
 
         match self.scores.entry(value.to_string()) {
             dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
-                // if there's a score already, get it
                 let old_score = occupied.get();
 
                 if old_score > &score {
-                    // if current score is older than prev score, ignore it, it's a laggy event
                     return;
                 }
+
                 self.elements.remove(old_score);
                 occupied.insert(score);
             }
@@ -67,6 +66,9 @@ impl ZSet {
 
         let start = start << 64;
         let end = end << 64;
+
+        let max_u64 = u64::MAX as u128;
+        let end = end | max_u64;
 
         for entry in self.elements.range(start..end) {
             let ts = (*entry.key() >> 64) as i64;
@@ -106,8 +108,11 @@ mod test {
         zset.update("lets", 20);
         zset.update("go", 40);
 
+        let mut actual = zset.range(10, 50);
+        actual.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+
         assert_eq!(
-            zset.range(10, 50),
+            actual,
             vec![
                 ("hey".to_string(), 10),
                 ("ho".to_string(), 20),

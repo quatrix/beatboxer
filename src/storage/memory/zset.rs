@@ -2,6 +2,7 @@ use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::cell::RefCell;
+use tracing::info;
 
 thread_local! {
     static RNG: RefCell<StdRng> = RefCell::new(StdRng::from_entropy());
@@ -56,7 +57,7 @@ impl ZSet {
             }
         }
 
-        self.elements.insert(score, value.to_string());
+        //self.elements.insert(score, value.to_string());
     }
 
     pub fn range(&self, start: i64, end: i64) -> Vec<(String, i64)> {

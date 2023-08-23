@@ -1,9 +1,15 @@
 use crossbeam_skiplist::SkipMap;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::cell::RefCell;
+
+thread_local! {
+    static RNG: RefCell<StdRng> = RefCell::new(StdRng::from_entropy());
+}
 
 pub struct ZSet {
-    pub scores: DashMap<String, i64>,
-    elements: SkipMap<i64, DashSet<String>>,
+    pub scores: DashMap<String, u128>,
+    elements: SkipMap<u128, String>,
 }
 
 impl Default for ZSet {
@@ -25,10 +31,15 @@ impl ZSet {
     }
 
     pub fn get(&self, value: &str) -> Option<i64> {
-        self.scores.get(value).map(|v| *v)
+        self.scores.get(value).map(|v| (*v >> 64) as i64)
     }
 
     pub fn update(&self, value: &str, score: i64) {
+        let score = score as u128;
+        let score: u128 = score << 64;
+        let random_lsb = RNG.with(|rng| rng.borrow_mut().gen::<u64>()) as u128;
+        let score = score | random_lsb;
+
         match self.scores.entry(value.to_string()) {
             dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
                 // if there's a score already, get it
@@ -38,40 +49,30 @@ impl ZSet {
                     // if current score is older than prev score, ignore it, it's a laggy event
                     return;
                 }
-
-                // get the set based on the old score
-                if let Some(set) = self.elements.get(old_score) {
-                    // remove the old value from the set, and if the set is empty remove the whole
-                    // set.
-                    let set_l = set.value();
-                    set_l.remove(value);
-                    if set_l.is_empty() {
-                        self.elements.remove(old_score);
-                    }
-                }
+                self.elements.remove(old_score);
                 occupied.insert(score);
             }
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
                 vacant.insert(score);
             }
-        };
+        }
 
-        let entry = self.elements.get_or_insert(score, DashSet::new());
-
-        let set_l = entry.value();
-        set_l.insert(value.to_string());
+        self.elements.insert(score, value.to_string());
     }
 
     pub fn range(&self, start: i64, end: i64) -> Vec<(String, i64)> {
         let mut res = vec![];
+        let start = start as u128;
+        let end = end as u128;
+
+        let start = start << 64;
+        let end = end << 64;
 
         for entry in self.elements.range(start..end) {
-            let score = *entry.key();
-            let set_l = entry.value();
+            let ts = (*entry.key() >> 64) as i64;
+            let value = entry.value();
 
-            for element in set_l.iter() {
-                res.push((element.to_string(), score));
-            }
+            res.push((value.to_string(), ts));
         }
         res
     }
@@ -93,6 +94,26 @@ mod test {
         assert_eq!(
             zset.range(30, 50),
             vec![("lets".to_string(), 30), ("go".to_string(), 40)]
+        );
+    }
+
+    #[test]
+    fn test_different_ids_with_same_timestamp() {
+        let zset = ZSet::new();
+
+        zset.update("hey", 10);
+        zset.update("ho", 20);
+        zset.update("lets", 20);
+        zset.update("go", 40);
+
+        assert_eq!(
+            zset.range(10, 50),
+            vec![
+                ("hey".to_string(), 10),
+                ("ho".to_string(), 20),
+                ("lets".to_string(), 20),
+                ("go".to_string(), 40)
+            ]
         );
     }
 

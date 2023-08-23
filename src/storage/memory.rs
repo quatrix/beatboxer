@@ -180,7 +180,15 @@ impl Storage for InMemoryStorage {
     async fn serialize_state(&self) -> Result<Vec<u8>> {
         let t0 = std::time::Instant::now();
 
-        let bin = to_allocvec(&self.keep_alives.scores)?;
+        let mut scores: HashMap<String, i64> = HashMap::new();
+
+        // FIXME: converting the u128 state to i64 for serialization
+        // not really optimized. find better way.
+        for element in self.keep_alives.scores.iter() {
+            scores.insert(element.key().to_string(), (element.value() >> 64) as i64);
+        }
+
+        let bin = to_allocvec(&scores)?;
         info!(
             "Serialized state in {:.2} secs ({} keys)",
             t0.elapsed().as_secs_f32(),

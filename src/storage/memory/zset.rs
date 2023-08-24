@@ -11,6 +11,7 @@ thread_local! {
 pub struct ZSet {
     pub scores: DashMap<String, u128>,
     elements: SkipMap<u128, String>,
+    elements_two: SkipMap<u128, String>,
 }
 
 impl Default for ZSet {
@@ -24,6 +25,7 @@ impl ZSet {
         ZSet {
             scores: DashMap::new(),
             elements: SkipMap::new(),
+            elements_two: SkipMap::new(),
         }
     }
 
@@ -50,6 +52,7 @@ impl ZSet {
                 }
 
                 self.elements.remove(old_score);
+                self.elements_two.remove(old_score);
                 occupied.insert(score);
             }
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
@@ -58,6 +61,7 @@ impl ZSet {
         }
 
         //self.elements.insert(score, value.to_string());
+        self.elements_two.insert(score, value.to_string());
     }
 
     pub fn range(&self, start: i64, end: i64) -> Vec<(String, i64)> {

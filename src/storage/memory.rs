@@ -106,7 +106,7 @@ impl InMemoryStorage {
 
                     let end = max(oldest_ts, now - dead_ms);
 
-                    let dead_ids = keep_alives_c.range(oldest_ts, end);
+                    let dead_ids = keep_alives_c.pop_lower_than_score(end);
 
                     for (id, ts) in dead_ids {
                         let event = Event {

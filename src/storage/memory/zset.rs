@@ -2,7 +2,7 @@ use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::cell::RefCell;
-use tracing::info;
+use tracing::error;
 
 thread_local! {
     static RNG: RefCell<StdRng> = RefCell::new(StdRng::from_entropy());
@@ -11,7 +11,6 @@ thread_local! {
 pub struct ZSet {
     pub scores: DashMap<String, u128>,
     elements: SkipMap<u128, String>,
-    elements_two: SkipMap<u128, String>,
 }
 
 impl Default for ZSet {
@@ -25,7 +24,6 @@ impl ZSet {
         ZSet {
             scores: DashMap::new(),
             elements: SkipMap::new(),
-            elements_two: SkipMap::new(),
         }
     }
 
@@ -52,7 +50,6 @@ impl ZSet {
                 }
 
                 self.elements.remove(old_score);
-                self.elements_two.remove(old_score);
                 occupied.insert(score);
             }
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
@@ -60,27 +57,36 @@ impl ZSet {
             }
         }
 
-        //self.elements.insert(score, value.to_string());
-        self.elements_two.insert(score, value.to_string());
+        self.elements.insert(score, value.to_string());
     }
 
-    pub fn range(&self, start: i64, end: i64) -> Vec<(String, i64)> {
+    pub fn pop_lower_than_score(&self, max_score: i64) -> Vec<(String, i64)> {
         let mut res = vec![];
-        let start = start as u128;
-        let end = end as u128;
 
-        let start = start << 64;
-        let end = end << 64;
+        let max_score = max_score as u128;
+        let max_score = max_score << 64;
 
-        let max_u64 = u64::MAX as u128;
-        let end = end | max_u64;
+        while let Some(element) = self.elements.front() {
+            let lowest_score = element.key();
 
-        for entry in self.elements.range(start..end) {
-            let ts = (*entry.key() >> 64) as i64;
-            let value = entry.value();
+            if lowest_score > &max_score {
+                break;
+            }
 
-            res.push((value.to_string(), ts));
+            match self.elements.pop_front() {
+                Some(p_element) => {
+                    let original_score = p_element.key();
+                    let original_score = (original_score >> 64) as i64;
+
+                    res.push((p_element.value().to_string(), original_score));
+                }
+                None => {
+                    error!("this shouldn't happen!");
+                    break;
+                }
+            }
         }
+
         res
     }
 }
@@ -99,8 +105,8 @@ mod test {
         zset.update("go", 40);
 
         assert_eq!(
-            zset.range(30, 50),
-            vec![("lets".to_string(), 30), ("go".to_string(), 40)]
+            zset.pop_lower_than_score(30),
+            vec![("hey".to_string(), 10), ("ho".to_string(), 20)]
         );
     }
 
@@ -113,7 +119,7 @@ mod test {
         zset.update("lets", 20);
         zset.update("go", 40);
 
-        let mut actual = zset.range(10, 50);
+        let mut actual = zset.pop_lower_than_score(50);
         actual.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
 
         assert_eq!(
@@ -134,6 +140,6 @@ mod test {
         zset.update("hey", 20);
         zset.update("hey", 10);
 
-        assert_eq!(zset.range(0, 50), vec![("hey".to_string(), 20)]);
+        assert_eq!(zset.pop_lower_than_score(50), vec![("hey".to_string(), 20)]);
     }
 }

@@ -172,6 +172,7 @@ async fn ws_client(
     let mut waiting_death = HashMap::new();
     let mut connected_counter = HashMap::new();
     let mut dead_counter = HashMap::new();
+    let mut connected_ts: HashMap<String, i64> = HashMap::new();
     let mut issues = 0;
     let mut pairs = 0;
     let mut events = Vec::new();
@@ -193,7 +194,7 @@ async fn ws_client(
                 events.push(msg.to_string());
 
                 let mut parts = msg.split(',');
-                let _ts = parts.next().unwrap();
+                let ts = parts.next().unwrap().parse::<i64>().unwrap();
                 let id = parts.next().unwrap();
                 let state = parts.next().unwrap();
 
@@ -202,6 +203,7 @@ async fn ws_client(
                 if state == "CONNECTED" {
                     *waiting_death.entry(id.to_string()).or_insert(0) += 1;
                     *connected_counter.entry(id.to_string()).or_insert(0) += 1;
+                    connected_ts.insert(id.to_string(), ts);
                 } else if state == "DEAD" {
                     *dead_counter.entry(id.to_string()).or_insert(0) += 1;
                     // if got dead, there should be exactly one connected.
@@ -211,6 +213,28 @@ async fn ws_client(
                                 warn!("[{}] got DEAD but current connected count is {}", id, e.get());
                                 issues += 1;
                             } else {
+
+                                match connected_ts.get(id) {
+                                    Some(c_ts) => {
+                                        let delta = ts - c_ts;
+
+                                        if delta < 5000 {
+                                            error!("[{}] got dead event too soon! (delta: {})", id, delta);
+                                            issues += 1;
+                                        } else if delta > 30000 {
+                                            error!("[{}] got dead event too late! (delta: {})", id, delta);
+                                            issues += 1;
+                                        }
+                                    }
+                                    None => {
+                                        error!("[{}] wat, no ts??", id);
+                                        issues += 1;
+
+                                    }
+
+                                }
+
+
                                 pairs += 1;
                                 *e.get_mut() -= 1;
                             }
@@ -219,6 +243,7 @@ async fn ws_client(
                             error!("[{}] got DEAD before CONNECTED", id);
                         }
                     }
+
                 } else {
                     panic!("unknown state {}", state);
                 }

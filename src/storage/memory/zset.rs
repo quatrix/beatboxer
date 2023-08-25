@@ -1,16 +1,12 @@
+use atomic_counter::{AtomicCounter, RelaxedCounter};
 use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::cell::RefCell;
 use tracing::error;
-
-thread_local! {
-    static RNG: RefCell<StdRng> = RefCell::new(StdRng::from_entropy());
-}
 
 pub struct ZSet {
     pub scores: DashMap<String, u128>,
     elements: SkipMap<u128, String>,
+    counter: RelaxedCounter,
 }
 
 impl Default for ZSet {
@@ -24,6 +20,7 @@ impl ZSet {
         ZSet {
             scores: DashMap::new(),
             elements: SkipMap::new(),
+            counter: RelaxedCounter::new(0),
         }
     }
 
@@ -36,10 +33,16 @@ impl ZSet {
     }
 
     pub fn update(&self, value: &str, score: i64) {
+        // the score is actually a timestamp in millis
+        // there could be multiple updates for the same millisecond
+        // the skip_list stores ts -> device_id, so to enable
+        // multple devies in the same milli, we add a random number
+        // at the end of the millisecond.
         let score = score as u128;
         let score: u128 = score << 64;
-        let random_lsb = RNG.with(|rng| rng.borrow_mut().gen::<u64>()) as u128;
-        let score = score | random_lsb;
+        let counter_lsb = self.counter.inc();
+        let counter_lsb = counter_lsb as u128;
+        let score = score | counter_lsb;
 
         match self.scores.entry(value.to_string()) {
             dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
@@ -57,6 +60,10 @@ impl ZSet {
             }
         }
 
+        // there's a very small change of collision here
+        // that in the same millisecond multiple devices will get the
+        // same random number, but since the random number is 2^64
+        // the change is very low.
         self.elements.insert(score, value.to_string());
     }
 

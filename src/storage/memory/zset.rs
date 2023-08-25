@@ -36,8 +36,8 @@ impl ZSet {
         // the score is actually a timestamp in millis
         // there could be multiple updates for the same millisecond
         // the skip_list stores ts -> device_id, so to enable
-        // multple devies in the same milli, we add a random number
-        // at the end of the millisecond.
+        // multple devies in the same milli, we add a counter
+        // for each update at the end of the millisecond.
         let score = score as u128;
         let score: u128 = score << 64;
         let counter_lsb = self.counter.inc();
@@ -60,10 +60,6 @@ impl ZSet {
             }
         }
 
-        // there's a very small change of collision here
-        // that in the same millisecond multiple devices will get the
-        // same random number, but since the random number is 2^64
-        // the change is very low.
         self.elements.insert(score, value.to_string());
     }
 

@@ -11,10 +11,11 @@ use super::KeepAlive;
 use anyhow::Result;
 
 use nom::{
+    branch::alt,
     bytes::complete::tag,
-    character::complete::{alphanumeric1, digit1, space1},
-    combinator::{map_res, recognize},
-    sequence::Tuple,
+    character::complete::{alphanumeric1, digit1, multispace1, one_of},
+    combinator::eof,
+    sequence::tuple,
     IResult,
 };
 
@@ -133,46 +134,64 @@ struct KaCommand {
 #[derive(Debug, PartialEq)]
 enum Command {
     KA(KaCommand),
-    Ping,
-    Closed,
     ParseError(String),
     Unknown(String),
+    Ping,
+    Closed,
 }
 
-fn parse_i64(input: &str) -> IResult<&str, i64> {
-    map_res(recognize(digit1), str::parse)(input)
-}
+fn parse_ka(input: &str) -> IResult<&str, Command> {
+    let mut parser = tuple((
+        tag("KA"),
+        multispace1,
+        alphanumeric1,
+        multispace1,
+        digit1,
+        multispace1,
+        one_of("01"),
+    ));
 
-fn parse_u8(input: &str) -> IResult<&str, u8> {
-    map_res(recognize(digit1), str::parse)(input)
-}
+    let (input, (_, _, id_str, _, ts_str, _, is_connected_char)) = parser(input)?;
 
-fn ka_command(input: &str) -> IResult<&str, KaCommand> {
-    let (input, _) = tag("KA ")(input)?;
-    let (input, (id, _, ts, _, is_connection_event)) =
-        (alphanumeric1, space1, parse_i64, space1, parse_u8).parse(input)?;
+    let id = id_str.to_string();
+    let ts = match ts_str.parse::<i64>() {
+        Ok(ts) => ts,
+        Err(e) => return Ok((input, Command::ParseError(e.to_string()))),
+    };
+
+    let is_connection_event = match is_connected_char {
+        '1' => true,
+        '0' => false,
+        _ => unreachable!("this shouldn't happen"),
+    };
+
     Ok((
         input,
-        KaCommand {
-            id: id.to_string(),
+        Command::KA(KaCommand {
+            id,
             ts,
-            is_connection_event: is_connection_event == 1,
-        },
+            is_connection_event,
+        }),
     ))
 }
 
-fn parse_command(line: &str) -> Command {
-    if line.is_empty() {
-        Command::Closed
-    } else if line.starts_with("KA ") {
-        match ka_command(line) {
-            Ok((_, ka)) => Command::KA(ka),
-            Err(e) => Command::ParseError(e.to_string()),
-        }
-    } else if line.starts_with("PING") {
-        Command::Ping
+fn parse_ping(input: &str) -> IResult<&str, Command> {
+    let (input, _) = tag("PING")(input)?;
+    Ok((input, Command::Ping))
+}
+
+fn parse_closed(input: &str) -> IResult<&str, Command> {
+    let (input, _) = eof(input)?; // check if the input is empty
+    Ok((input, Command::Closed))
+}
+
+fn parse_command(input: &str) -> Command {
+    let (rest, cmd) = alt((parse_closed, parse_ka, parse_ping))(input)
+        .unwrap_or((input, Command::Unknown(input.to_string())));
+    if rest.trim().is_empty() {
+        cmd
     } else {
-        Command::Unknown(line.to_string())
+        Command::Unknown(rest.to_string())
     }
 }
 
@@ -309,11 +328,19 @@ mod test {
         let cmd = "KA foo123 hey 0";
         assert_eq!(
             parse_command(cmd),
-            Command::ParseError(
-                "Parsing Error: Error { input: \"hey 0\", code: Digit }".to_string()
-            )
+            Command::Unknown("KA foo123 hey 0".to_string())
         );
     }
+
+    #[test]
+    fn test_cmd_ka_very_big_ts() {
+        let cmd = "KA foo123 9999999999999999999999999999999999999999 0";
+        assert_eq!(
+            parse_command(cmd),
+            Command::ParseError("number too large to fit in target type".to_string())
+        );
+    }
+
     #[test]
     fn test_ping() {
         let cmd = "PING";

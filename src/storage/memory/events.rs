@@ -45,7 +45,18 @@ impl Events {
             Err(index) => index,
         };
 
-        let events: Vec<Event> = events.range(index..).cloned().collect();
+        let mut first_index_with_ts = index;
+
+        // find the first one
+        for i in (0..index).rev() {
+            if events[i].ts == ts {
+                first_index_with_ts = i;
+            } else {
+                break;
+            }
+        }
+
+        let events: Vec<Event> = events.range(first_index_with_ts..).cloned().collect();
 
         info!(
             "getting events since {} (index: {}) number of events: {}",
@@ -163,6 +174,40 @@ mod test {
         }
 
         assert_eq!(e0.events_since_ts(0).await, all_events);
+    }
+
+    #[tokio::test]
+    async fn test_fetching_from_offset_with_duplicate_ts() {
+        let e0 = Events::new(5);
+
+        let all_events = vec![
+            Event {
+                ts: 5,
+                id: "heh".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 10,
+                id: "hey".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 10,
+                id: "ho".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 20,
+                id: "lets".to_string(),
+                typ: EventType::Connected,
+            },
+        ];
+
+        for event in &all_events {
+            e0.store_event(event.clone()).await;
+        }
+
+        assert_eq!(e0.events_since_ts(10).await, all_events[1..]);
     }
 
     #[tokio::test]

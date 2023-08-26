@@ -28,6 +28,10 @@ impl ZSet {
         self.scores.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn get(&self, value: &str) -> Option<i64> {
         self.scores.get(value).map(|v| (*v >> 64) as i64)
     }

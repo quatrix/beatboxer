@@ -22,9 +22,9 @@ use postcard::to_allocvec;
 use tokio::sync::mpsc::Receiver;
 use tracing::info;
 
-mod events;
-mod events_buffer;
-mod zset;
+pub mod events;
+pub mod events_buffer;
+pub mod zset;
 
 pub struct InMemoryStorage {
     keep_alives: Arc<ZSet>,
@@ -36,8 +36,9 @@ pub struct InMemoryStorage {
 
 impl InMemoryStorage {
     pub fn new(max_history_size: usize) -> Self {
-        let notification_dispatcher = Arc::new(NotificationDispatcher::new());
         let events_history = Arc::new(Events::new(max_history_size));
+        let notification_dispatcher =
+            Arc::new(NotificationDispatcher::new(Arc::clone(&events_history)));
 
         Self {
             keep_alives: Arc::new(ZSet::new()),
@@ -50,10 +51,6 @@ impl InMemoryStorage {
 
     async fn set_ka(&self, id: &str, ts: i64) {
         self.keep_alives.update(id, ts);
-    }
-
-    async fn events_since_ts(&self, ts: i64) -> Vec<Event> {
-        self.events_history.events_since_ts(ts).await
     }
 
     fn start_consolidator(&self) {
@@ -204,20 +201,9 @@ impl Storage for InMemoryStorage {
     async fn subscribe(&self, offset: Option<i64>) -> Result<Receiver<Event>> {
         let buffer_size = self.max_history_size + 500_000;
 
-        match offset {
-            Some(offset) => {
-                let events = self.events_since_ts(offset).await;
-
-                self.notification_dispatcher
-                    .add_subscriber(buffer_size, Some(events))
-                    .await
-            }
-            None => {
-                self.notification_dispatcher
-                    .add_subscriber(buffer_size, None)
-                    .await
-            }
-        }
+        self.notification_dispatcher
+            .add_subscriber(buffer_size, offset)
+            .await
     }
 
     fn start_background_tasks(&self) {

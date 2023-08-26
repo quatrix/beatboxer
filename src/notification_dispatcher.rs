@@ -8,47 +8,45 @@ use tokio::sync::{
 use tracing::{error, info};
 
 use crate::keep_alive::types::Event;
+use crate::storage::memory::events::Events;
 
 pub struct NotificationDispatcher {
     txs: Arc<RwLock<Vec<Sender<Event>>>>,
+    events_history: Arc<Events>,
 }
 
 impl NotificationDispatcher {
-    pub fn new() -> Self {
+    pub fn new(events_history: Arc<Events>) -> Self {
         NotificationDispatcher {
             txs: Arc::new(RwLock::new(Vec::new())),
+            events_history,
         }
     }
 
     pub async fn add_subscriber(
         &self,
         buffer_size: usize,
-        initial_payload: Option<Vec<Event>>,
+        offset: Option<i64>,
     ) -> Result<Receiver<Event>> {
         let (tx, rx) = mpsc::channel(buffer_size);
 
-        if let Some(events) = initial_payload {
-            for event in events {
-                match tx.try_send(event) {
-                    Ok(_) => {}
-                    Err(TrySendError::Closed(_)) => {
-                        error!("(subscriber-init) Channel closed.");
-                        return Err(anyhow::Error::msg(
-                            "channel closed while doing initial send",
-                        ));
-                    }
-                    Err(TrySendError::Full(_)) => {
-                        error!("(subscriber-init) Channel full.");
-                        metrics::increment_counter!("channel_full", "op" => "notify-init");
-                        return Err(anyhow::Error::msg(
-                            "channel got full while doing initial send",
-                        ));
-                    }
-                }
-            }
-        }
+        let last_offset = if let Some(offset) = offset {
+            write_events_since_offset_to_channel(&self.events_history, offset, &tx).await?
+        } else {
+            None
+        };
+
         {
             let mut txs = self.txs.write().await;
+
+            // some new events might have been added while we were synching
+            // sending this delta while holding a write lock makes sure no events
+            // get lost, but some these events might get published more than once.
+            if let Some(last_offset) = last_offset {
+                write_events_since_offset_to_channel(&self.events_history, last_offset, &tx)
+                    .await?;
+            }
+
             txs.push(tx);
         }
 
@@ -100,10 +98,35 @@ impl NotificationDispatcher {
     }
 }
 
-impl Default for NotificationDispatcher {
-    fn default() -> Self {
-        Self::new()
+async fn write_events_since_offset_to_channel(
+    events_history: &Arc<Events>,
+    offset: i64,
+    tx: &Sender<Event>,
+) -> Result<Option<i64>> {
+    let events = events_history.events_since_ts(offset).await;
+    let mut last_offset = offset;
+
+    for event in events {
+        last_offset = event.ts;
+        match tx.try_send(event) {
+            Ok(_) => {}
+            Err(TrySendError::Closed(_)) => {
+                error!("(subscriber-init) Channel closed.");
+                return Err(anyhow::Error::msg(
+                    "channel closed while doing initial send",
+                ));
+            }
+            Err(TrySendError::Full(_)) => {
+                error!("(subscriber-init) Channel full.");
+                metrics::increment_counter!("channel_full", "op" => "notify-init");
+                return Err(anyhow::Error::msg(
+                    "channel got full while doing initial send",
+                ));
+            }
+        }
     }
+
+    Ok(Some(last_offset))
 }
 
 #[cfg(test)]
@@ -120,7 +143,9 @@ mod test {
             typ: EventType::Connected,
         };
 
-        let nd = NotificationDispatcher::new();
+        let events_history = Arc::new(Events::new(1));
+
+        let nd = NotificationDispatcher::new(events_history);
 
         let mut rx0 = nd.add_subscriber(5, None).await.unwrap();
         let mut rx1 = nd.add_subscriber(5, None).await.unwrap();
@@ -132,5 +157,45 @@ mod test {
 
         assert_eq!(actual0, event);
         assert_eq!(actual1, event);
+    }
+
+    #[tokio::test]
+    async fn test_with_offset() {
+        let events = vec![
+            Event {
+                id: "hey".to_string(),
+                ts: 10,
+                typ: EventType::Connected,
+            },
+            Event {
+                id: "ho".to_string(),
+                ts: 20,
+                typ: EventType::Connected,
+            },
+            Event {
+                id: "lets".to_string(),
+                ts: 20,
+                typ: EventType::Connected,
+            },
+            Event {
+                id: "go".to_string(),
+                ts: 30,
+                typ: EventType::Connected,
+            },
+        ];
+
+        let events_history = Arc::new(Events::new(10));
+
+        for e in events {
+            events_history.store_event(e).await;
+        }
+
+        let nd = NotificationDispatcher::new(events_history);
+
+        let mut rx0 = nd.add_subscriber(5, Some(20)).await.unwrap();
+
+        assert_eq!(rx0.recv().await.unwrap().id, "ho");
+        assert_eq!(rx0.recv().await.unwrap().id, "lets");
+        assert_eq!(rx0.recv().await.unwrap().id, "go");
     }
 }

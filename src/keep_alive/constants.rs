@@ -22,9 +22,9 @@ lazy_static! {
         from_env("SOCKET_READ_LONG_TIMEOUT_MS", Duration::from_secs(10));
     pub static ref SYNC_TIMEOUT: Duration = from_env("SYNC_TIMEOUT_MS", Duration::from_secs(240));
     pub static ref LAST_PONG_TIMEOUT: Duration =
-        from_env("LAST_PONG_TIMEOUT_MS", Duration::from_secs(10));
+        from_env("LAST_PONG_TIMEOUT_MS", Duration::from_secs(5));
     pub static ref DEAD_DEVICE_TIMEOUT: Duration =
-        from_env("DEAD_DEVICE_TIMEOUT_MS", Duration::from_secs(20));
+        from_env("DEAD_DEVICE_TIMEOUT_MS", Duration::from_secs(30));
     pub static ref CONSOLIDATION_WINDOW: Duration =
         from_env("CONSOLIDATION_WINDOW_MS", Duration::from_secs(2));
 }

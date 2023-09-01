@@ -1,7 +1,7 @@
 use atomic_counter::{AtomicCounter, RelaxedCounter};
 use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
-use tracing::error;
+use tracing::{debug, error};
 
 pub struct ZSet {
     pub scores: DashMap<String, u128>,
@@ -42,6 +42,7 @@ impl ZSet {
         // the skip_list stores ts -> device_id, so to enable
         // multple devies in the same milli, we add a counter
         // for each update at the end of the millisecond.
+        let original_score = score;
         let score = score as u128;
         let score: u128 = score << 64;
         let counter_lsb = self.counter.inc();
@@ -64,12 +65,17 @@ impl ZSet {
             }
         }
 
+        debug!(
+            "[ZSET] storing id {} score: {} ts: {}",
+            value, score, original_score
+        );
         self.elements.insert(score, value.to_string());
     }
 
     pub fn pop_lower_than_score(&self, max_score: i64) -> Vec<(String, i64)> {
         let mut res = vec![];
 
+        debug!("[ZSET] poping max_score: {}", max_score);
         let max_score = max_score as u128;
         let max_score = max_score << 64;
 
@@ -84,6 +90,12 @@ impl ZSet {
                 Some(p_element) => {
                     let original_score = p_element.key();
                     let original_score = (original_score >> 64) as i64;
+
+                    debug!(
+                        "[ZSET] returning {} - {}",
+                        p_element.value(),
+                        original_score
+                    );
 
                     res.push((p_element.value().to_string(), original_score));
                 }

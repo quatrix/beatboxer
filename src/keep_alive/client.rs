@@ -1,7 +1,7 @@
 use crate::{
     keep_alive::{
         cluster_status::NodeStatus,
-        constants::{SOCKET_READ_LONG_TIMEOUT, SOCKET_WRITE_TIMEOUT},
+        constants::{CONSOLIDATION_WINDOW, SOCKET_READ_LONG_TIMEOUT, SOCKET_WRITE_TIMEOUT},
         types::Event,
     },
     storage::Storage,
@@ -32,7 +32,7 @@ use tokio::{
     net::TcpStream,
     time::timeout,
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 async fn read_blob<T: Clone + DeserializeOwned + Send + Sync + 'static>(
     tag: &str,
@@ -89,6 +89,12 @@ async fn do_sync(
     socket: &mut BufReader<TcpStream>,
     kac: &Arc<dyn Storage + Send + Sync>,
 ) -> Result<()> {
+    info!(
+        "waiting {:?} (+1s) before starting sync, to let things get commited.",
+        *CONSOLIDATION_WINDOW
+    );
+    tokio::time::sleep(*CONSOLIDATION_WINDOW + Duration::from_secs(1)).await;
+
     info!("[🔄] Sending SYNC request to {}...", addr);
     let t_e2e_0 = std::time::Instant::now();
 
@@ -216,7 +222,6 @@ impl KeepAlive {
                         Ok(socket) => {
                             let mut socket = BufReader::new(socket);
 
-                            cluster_status.set_node_status(&addr, NodeStatus::Synching);
                             match do_sync(&addr, &mut socket, &kac).await {
                                 Ok(_) => {
                                     cluster_status.set_node_status(&addr, NodeStatus::Synched);
@@ -260,6 +265,7 @@ impl KeepAlive {
                                             "addr" => addr.to_string(),
                                         );
 
+                                        debug!("got KA from {} - event: {:?}", addr, ka);
                                         kac.set(&ka.id, ka.ts, ka.is_connection_event).await;
                                     }
                                     Command::Ping => {

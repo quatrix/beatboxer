@@ -139,8 +139,9 @@ async fn handle_client_commands(
                 Message::KeepAliveUpdate(ka) => {
                     let mut write_buf = ArrayString::<64>::new();
                     writeln!(write_buf, "KA {} {} {}", ka.id, ka.ts, ka.is_connection_event as u8)?;
-                    debug!("[{}] Sending KA '{}'", addr, write_buf);
+                    debug!("[{}] Sending KA '{}'...", addr, write_buf);
                     let _ = timeout(*SOCKET_WRITE_TIMEOUT, socket.write_all(write_buf.as_bytes())).await?;
+                    debug!("[{}] Sent KA '{}'.", addr, write_buf);
                     Ok(())
                 }
             },

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use postcard::to_allocvec;
 use std::{
     collections::{HashSet, VecDeque},
@@ -26,18 +26,34 @@ impl Events {
         }
     }
 
-    pub async fn store_event(&self, event: Event) {
-        let mut events = self.events.write().await;
+    pub async fn last_ts(&self) -> Option<i64> {
+        let events = self.events.read().await;
+        events.back().map(|e| e.ts)
+    }
 
+    pub async fn store_event(&self, event: Event) -> Result<()> {
+        // FIXME: this should make sure that events
+        // from the same id are in order, order between all events
+        // isn't guaranteed but for the same device it should.
+        //
+        let mut events = self.events.write().await;
         events.push_back(event.clone());
 
         if events.len() > self.max_history_size {
             let overflow = events.len() - self.max_history_size;
             let _ = events.drain(0..overflow);
         }
+
+        Ok(())
     }
 
     pub async fn events_since_ts(&self, ts: i64) -> Vec<Event> {
+        {
+            // FIXME: is this cheating?
+            let mut events = self.events.write().await;
+            events.make_contiguous().sort()
+        }
+
         let events = self.events.read().await;
 
         let index = match events.binary_search_by_key(&ts, |event| event.ts) {
@@ -140,7 +156,7 @@ mod test {
         ];
 
         for event in &all_events {
-            e0.store_event(event.clone()).await;
+            let _ = e0.store_event(event.clone()).await;
         }
 
         assert_eq!(e0.events_since_ts(20).await, all_events[1..]);

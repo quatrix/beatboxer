@@ -10,7 +10,10 @@ use rocksdb::DB;
 use anyhow::Result;
 use tokio::sync::mpsc::Receiver;
 
-use crate::keep_alive::types::Event;
+use crate::keep_alive::{
+    cluster_status::ClusterStatus,
+    types::{Event, EventType},
+};
 
 use super::Storage;
 pub struct PersistentStorage {
@@ -39,7 +42,7 @@ impl PersistentStorage {
 
 #[async_trait]
 impl Storage for PersistentStorage {
-    fn start_background_tasks(&self) {}
+    fn start_background_tasks(&self, _cluster_status: Arc<ClusterStatus>) {}
 
     async fn len(&self) -> usize {
         todo!("not implemented")

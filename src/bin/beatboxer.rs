@@ -1,4 +1,5 @@
 use anyhow::Result;
+use arrayvec::ArrayString;
 use beatboxer::{
     keep_alive::{
         constants::is_dead,
@@ -8,6 +9,7 @@ use beatboxer::{
     metrics::{setup_metrics_recorder, track_metrics},
     storage::{memory::InMemoryStorage, Storage},
 };
+use std::fmt::Write as _;
 
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -88,8 +90,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let storage = get_storage(args.use_rocksdb, args.http_port);
 
-    storage.start_background_tasks();
-
     let keep_alive = Arc::new(KeepAlive::new(
         &args.listen_addr,
         args.listen_port,
@@ -97,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         storage,
     ));
     keep_alive.connect_to_nodes();
+    keep_alive.start_background_tasks();
 
     let cloned_keep_alive = Arc::clone(&keep_alive);
     let recorder_handle = setup_metrics_recorder()?;
@@ -139,8 +140,15 @@ async fn pulse_handler(
     State(keep_alive): State<Arc<dyn KeepAliveTrait + Send + Sync>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    keep_alive.pulse(&id).await;
-    (StatusCode::OK, "OK")
+    if keep_alive.is_ready().await {
+        let ts = keep_alive.pulse(&id).await;
+        (StatusCode::OK, format!("{}", ts))
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Service Not Ready Yet".to_string(),
+        )
+    }
 }
 
 async fn get_ka_handler(

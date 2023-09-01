@@ -18,7 +18,7 @@ use crate::keep_alive::cluster_status::ClusterStatus;
 use crate::storage::Storage;
 
 use self::{
-    constants::DEAD_DEVICE_TIMEOUT,
+    constants::{CONSOLIDATION_WINDOW, DEAD_DEVICE_TIMEOUT},
     types::{Event, KeepAliveUpdate, Message},
 };
 
@@ -35,7 +35,7 @@ pub struct KeepAlive {
 
 #[async_trait]
 pub trait KeepAliveTrait {
-    async fn pulse(&self, id: &str);
+    async fn pulse(&self, id: &str) -> i64;
     async fn get(&self, id: &str) -> Option<i64>;
     async fn subscribe(&self, offset: Option<i64>) -> Result<Receiver<Event>>;
     async fn is_ready(&self) -> bool;
@@ -145,6 +145,11 @@ impl KeepAlive {
             }
         });
     }
+
+    pub fn start_background_tasks(&self) {
+        self.keep_alives
+            .start_background_tasks(Arc::clone(&self.cluster_status));
+    }
 }
 
 #[async_trait]
@@ -153,15 +158,36 @@ impl KeepAliveTrait for KeepAlive {
         self.keep_alives.get(id).await
     }
 
-    async fn pulse(&self, id: &str) {
+    async fn pulse(&self, id: &str) -> i64 {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
 
         let is_connection_event = match self.keep_alives.get(id).await {
-            None => true,
-            Some(ts) => now - ts > (DEAD_DEVICE_TIMEOUT.as_millis() as i64),
+            None => {
+                debug!(
+                    "[pulse] this is a CONNECTED event. id: {} first time KA (ts: {})",
+                    id, now
+                );
+                true
+            }
+            Some(ts) => {
+                let delta = now - ts;
+
+                if delta
+                    > ((*DEAD_DEVICE_TIMEOUT + *CONSOLIDATION_WINDOW + Duration::from_secs(1))
+                        .as_millis() as i64)
+                {
+                    debug!(
+                        "[pulse] this is a CONNECTED event. id: {} delta: {} (ts: {})",
+                        id, delta, now
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
         };
 
         self.keep_alives.set(id, now, is_connection_event).await;
@@ -185,6 +211,8 @@ impl KeepAliveTrait for KeepAlive {
                 }
             }
         }
+
+        now
     }
 
     async fn subscribe(&self, offset: Option<i64>) -> Result<Receiver<Event>> {
@@ -265,7 +293,8 @@ mod test {
     #[tokio::test]
     async fn test_pulse_publishes_events() {
         let storage = Arc::new(InMemoryStorage::new(10));
-        storage.start_background_tasks();
+        let cluster_status = ClusterStatus::new(vec![]);
+        storage.start_background_tasks(Arc::new(cluster_status));
 
         let ka = KeepAlive::new("127.0.0.1", 6666, vec![], storage);
         let mut events_rxs = Vec::new();

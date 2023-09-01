@@ -1,8 +1,9 @@
 use crossbeam_skiplist::SkipMap;
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::RwLock;
+use tracing::error;
 
-use crate::keep_alive::types::Event;
+use crate::keep_alive::types::{Event, EventType};
 
 type EventsBufferSkipMap = SkipMap<i64, RwLock<HashSet<Event>>>;
 
@@ -43,6 +44,7 @@ impl EventsBuffer {
         // instead of building and returning a vector.
 
         let mut e = Vec::new();
+        let mut connected: HashSet<String> = HashSet::new();
 
         while self.events_buffer.front().map(|f| *f.key() < buffer_until) == Some(true) {
             if let Some(entry) = self.events_buffer.pop_front() {
@@ -51,6 +53,19 @@ impl EventsBuffer {
                 events_set.sort();
 
                 for event in events_set {
+                    if event.typ == EventType::Connected {
+                        // if we already seen a connected event for this id, drop it
+                        if connected.contains(&event.id) {
+                            continue;
+                        } else {
+                            connected.insert(event.id.clone());
+                        }
+                    } else if event.typ == EventType::Dead {
+                        // if we see dead event, we can clear the connected set
+                        connected.remove(&event.id);
+                    } else {
+                        error!("wat");
+                    }
                     e.push(event.clone());
                 }
             }
@@ -129,5 +144,130 @@ mod test {
                 .collect::<Vec<String>>(),
             vec!["lets", "go"]
         );
+    }
+
+    #[tokio::test]
+    async fn test_double_connect_should_be_eliminated_and_take_the_first_one() {
+        let e0 = EventsBuffer::new();
+
+        let all_events = vec![
+            Event {
+                ts: 40,
+                id: "foo".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 20,
+                id: "bar".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 10,
+                id: "foo".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 45,
+                id: "baz".to_string(),
+                typ: EventType::Connected,
+            },
+        ];
+
+        for event in &all_events {
+            e0.store_event(event.clone()).await;
+        }
+
+        // events older than 20, should return
+        let consolidated = e0.consolidate(50).await;
+
+        let expected_events = vec![
+            Event {
+                ts: 10,
+                id: "foo".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 20,
+                id: "bar".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 45,
+                id: "baz".to_string(),
+                typ: EventType::Connected,
+            },
+        ];
+
+        assert_eq!(consolidated, expected_events,);
+    }
+
+    #[tokio::test]
+    async fn test_double_connect_with_dead_in_between() {
+        let e0 = EventsBuffer::new();
+
+        let all_events = vec![
+            Event {
+                ts: 40,
+                id: "foo".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 20,
+                id: "bar".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 15,
+                id: "foo".to_string(),
+                typ: EventType::Dead,
+            },
+            Event {
+                ts: 10,
+                id: "foo".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 45,
+                id: "baz".to_string(),
+                typ: EventType::Connected,
+            },
+        ];
+
+        for event in &all_events {
+            e0.store_event(event.clone()).await;
+        }
+
+        // events older than 20, should return
+        let consolidated = e0.consolidate(50).await;
+
+        let expected_events = vec![
+            Event {
+                ts: 10,
+                id: "foo".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 15,
+                id: "foo".to_string(),
+                typ: EventType::Dead,
+            },
+            Event {
+                ts: 20,
+                id: "bar".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 40,
+                id: "foo".to_string(),
+                typ: EventType::Connected,
+            },
+            Event {
+                ts: 45,
+                id: "baz".to_string(),
+                typ: EventType::Connected,
+            },
+        ];
+
+        assert_eq!(consolidated, expected_events,);
     }
 }

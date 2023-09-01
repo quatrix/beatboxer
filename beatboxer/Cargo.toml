@@ -7,7 +7,6 @@ edition = "2021"
 debug = true
 
 [dependencies]
-adjacent-pair-iterator = { version = "1.0.0", optional = true}
 anyhow = "1.0.72"
 arrayvec = "0.7.4"
 atomic-counter = "1.0.1"
@@ -19,18 +18,13 @@ crossbeam-skiplist = { version = "0.1.1", features = ["crossbeam-epoch"] }
 dashmap = { version = "5.5.0", features = ["serde"] }
 futures = "0.3.28"
 gethostname = "0.4.3"
-histogram = { version = "0.7.4", optional = true }
 jemallocator = "0.5.4"
-kanal = { version = "0.1.0-pre8", optional = true }
 lazy_static = "1.4.0"
 metrics = "0.21.1"
 metrics-exporter-prometheus = "0.12.1"
 nom = "7.1.3"
 postcard = { version = "1.0.6", features = ["alloc"] }
 prost = "0.11.9"
-rand = { version = "0.8.5", optional = true}
-random-string = { version = "1.0.0", optional = true }
-reqwest = { version = "0.11.18", optional = true }
 rocksdb = { version = "0.21.0", features = ["serde"], optional = true}
 serde = { version = "1.0.182", features = ["serde_derive", "derive"] }
 serde_json = "1.0.104"
@@ -41,8 +35,3 @@ tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 
 [features]
 rocksdb = ["dep:rocksdb"]
-stress_test = ["dep:kanal", "dep:rand", "dep:reqwest", "dep:adjacent-pair-iterator", "dep:histogram", "dep:random-string"]
-
-[[bin]]
-name = "stress_test"
-required-features = ["stress_test"]

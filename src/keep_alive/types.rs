@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
@@ -15,7 +16,7 @@ pub enum Message {
     KeepAliveUpdate(KeepAliveUpdate),
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub enum EventType {
     Connected,
     Dead,
@@ -32,11 +33,31 @@ impl std::fmt::Display for EventType {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub struct Event {
     pub ts: i64,
     pub id: String,
     pub typ: EventType,
+}
+
+fn millis_to_dt(ts_millis: i64) -> DateTime<Utc> {
+    let ts_secs = ts_millis / 1000;
+    let ts_ns = (ts_millis % 1000) * 1_000_000;
+
+    DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(ts_secs, ts_ns as u32), Utc)
+}
+
+impl std::fmt::Debug for Event {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ts = millis_to_dt(self.ts);
+        let typ = match self.typ {
+            EventType::Connected => "C",
+            EventType::Dead => "D",
+            EventType::Unknown => "U",
+        };
+
+        write!(f, "{}-{}-{}", typ, self.id, ts.time())
+    }
 }
 
 impl Ord for Event {

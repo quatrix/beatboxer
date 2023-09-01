@@ -7,6 +7,7 @@ use std::{
 
 use crate::{
     keep_alive::{
+        cluster_status::ClusterStatus,
         constants::{CONSOLIDATION_WINDOW, DEAD_DEVICE_TIMEOUT},
         types::{Event, EventType},
     },
@@ -20,7 +21,7 @@ use anyhow::Result;
 use axum::async_trait;
 use postcard::to_allocvec;
 use tokio::sync::mpsc::Receiver;
-use tracing::info;
+use tracing::{debug, error, info};
 
 pub mod events;
 pub mod events_buffer;
@@ -53,13 +54,23 @@ impl InMemoryStorage {
         self.keep_alives.update(id, ts);
     }
 
-    fn start_consolidator(&self) {
+    fn start_consolidator(&self, cluster_status: Arc<ClusterStatus>) {
         let events_buffer = Arc::clone(&self.events_buffer);
         let events_history = Arc::clone(&self.events_history);
         let notification_dispatcher = Arc::clone(&self.notification_dispatcher);
 
         tokio::spawn(async move {
             let consolidation_ms = CONSOLIDATION_WINDOW.as_millis() as i64;
+
+            loop {
+                if cluster_status.is_ready() {
+                    info!("[🧠] cluster is ready! starting consolidator");
+                    break;
+                } else {
+                    info!("[🧠] cluster isn't ready yet...");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
 
             loop {
                 {
@@ -72,8 +83,11 @@ impl InMemoryStorage {
                     let consolidated_events = events_buffer.consolidate(buffer_until).await;
 
                     for event in consolidated_events {
-                        events_history.store_event(event.clone()).await;
-                        notification_dispatcher.notify(&event).await;
+                        debug!("sending event: {:?}", event);
+                        match events_history.store_event(event.clone()).await {
+                            Ok(_) => notification_dispatcher.notify(&event).await,
+                            Err(e) => error!("error while inserting to history: {:?}", e),
+                        }
                     }
                 }
 
@@ -82,17 +96,34 @@ impl InMemoryStorage {
         });
     }
 
-    fn watch_for_updates(&self) {
+    fn watch_for_updates(&self, cluster_status: Arc<ClusterStatus>) {
         let keep_alives_c = Arc::clone(&self.keep_alives);
         let events_buffer = Arc::clone(&self.events_buffer);
+        let events_history = Arc::clone(&self.events_history);
 
         tokio::spawn(async move {
-            let mut oldest_ts = std::time::SystemTime::now()
+            let start_of_watch = (std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
+                - *DEAD_DEVICE_TIMEOUT)
                 .as_millis() as i64;
 
+            loop {
+                if cluster_status.is_ready() {
+                    info!("[💀] cluster is ready! starting death watcher");
+                    break;
+                } else {
+                    info!("[💀] cluster isn't ready yet...");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+
             let dead_ms = DEAD_DEVICE_TIMEOUT.as_millis() as i64;
+
+            let end_of_history = match events_history.last_ts().await {
+                Some(ts) => ts,
+                None => start_of_watch,
+            };
 
             loop {
                 {
@@ -101,23 +132,32 @@ impl InMemoryStorage {
                         .unwrap()
                         .as_millis() as i64;
 
-                    let end = max(oldest_ts, now - dead_ms);
-
+                    let end = now - dead_ms;
                     let dead_ids = keep_alives_c.pop_lower_than_score(end);
 
                     for (id, ts) in dead_ids {
+                        let deadline = ts + dead_ms;
+
+                        // XXX: ignoring all events that would have happened
+                        // before the last event in history
+                        // this is needed when a node syncs with a peer and
+                        // and the zset get's populated with ts already in the history
+                        if deadline < end_of_history {
+                            debug!("skipping id: {} ts: {}", id, ts);
+                            continue;
+                        }
+
                         let event = Event {
-                            ts: ts + dead_ms,
+                            ts: deadline,
                             id: id.to_string(),
                             typ: EventType::Dead,
                         };
 
                         events_buffer.store_event(event.clone()).await;
                     }
-                    oldest_ts = end;
                 }
 
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_millis(1000)).await;
             }
         });
     }
@@ -125,7 +165,7 @@ impl InMemoryStorage {
 
 impl Default for InMemoryStorage {
     fn default() -> Self {
-        Self::new(500_000)
+        Self::new(3_000_000)
     }
 }
 
@@ -153,6 +193,7 @@ impl Storage for InMemoryStorage {
                 typ: EventType::Connected,
             };
 
+            debug!("events_buffer.store_event({:?})", event);
             self.events_buffer.store_event(event.clone()).await;
         }
     }
@@ -206,9 +247,9 @@ impl Storage for InMemoryStorage {
             .await
     }
 
-    fn start_background_tasks(&self) {
-        self.start_consolidator();
-        self.watch_for_updates();
+    fn start_background_tasks(&self, cluster_status: Arc<ClusterStatus>) {
+        self.start_consolidator(Arc::clone(&cluster_status));
+        self.watch_for_updates(cluster_status);
         self.notification_dispatcher.monitor();
     }
 }

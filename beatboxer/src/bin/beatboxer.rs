@@ -1,5 +1,4 @@
 use anyhow::Result;
-use arrayvec::ArrayString;
 use beatboxer::{
     keep_alive::{
         constants::is_dead,
@@ -9,7 +8,6 @@ use beatboxer::{
     metrics::{setup_metrics_recorder, track_metrics},
     storage::{memory::InMemoryStorage, Storage},
 };
-use std::fmt::Write as _;
 
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -31,7 +29,7 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser, Debug)]
@@ -112,6 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/metrics", get(move || ready(recorder_handle.render())))
         .route("/ping", get(ping_handler))
         .route("/ready", get(ready_handler))
+        .route("/internal/die", get(die_handler))
         .route("/cluster_status", get(cluster_status_handler))
         .with_state(cloned_keep_alive);
 
@@ -134,6 +133,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn ping_handler() -> &'static str {
     "PONG"
+}
+
+async fn die_handler() {
+    warn!("been asked to die! goodbye cruel word!");
+    std::process::exit(0)
 }
 
 async fn pulse_handler(

@@ -47,6 +47,16 @@ impl Events {
         Ok(())
     }
 
+    pub async fn get_all_events_from_id(&self, id: &str) -> Vec<Event> {
+        //FIXME slow, just using for debugging
+        let events = self.events.read().await;
+        events
+            .iter()
+            .filter(|e| e.id == id)
+            .map(|e| e.clone())
+            .collect::<Vec<Event>>()
+    }
+
     pub async fn events_since_ts(&self, ts: i64) -> Vec<Event> {
         {
             // FIXME: is this cheating?

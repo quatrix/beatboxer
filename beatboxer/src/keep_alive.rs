@@ -17,12 +17,9 @@ use tracing::{debug, error, info};
 use crate::keep_alive::cluster_status::ClusterStatus;
 use crate::storage::Storage;
 
-use self::{
-    constants::{CONSOLIDATION_WINDOW, DEAD_DEVICE_TIMEOUT},
-    types::{Event, KeepAliveUpdate, Message},
-};
+use self::types::{Event, EventType, KeepAliveUpdate, Message};
 
-type SenderChannels = Arc<RwLock<Vec<(String, Sender<Message>)>>>;
+pub type SenderChannels = Arc<RwLock<Vec<(String, Sender<Message>)>>>;
 
 pub struct KeepAlive {
     listen_addr: String,
@@ -92,6 +89,7 @@ impl KeepAlive {
         listen_port: u16,
         nodes: Vec<String>,
         storage: Arc<dyn Storage + Send + Sync>,
+        txs: SenderChannels,
     ) -> KeepAlive {
         let nodes = remove_myself(nodes, listen_port);
 
@@ -100,7 +98,7 @@ impl KeepAlive {
             listen_port,
             nodes: nodes.clone(),
             keep_alives: storage,
-            txs: Arc::new(RwLock::new(Vec::new())),
+            txs,
             cluster_status: Arc::new(ClusterStatus::new(nodes)),
         }
     }
@@ -155,7 +153,8 @@ impl KeepAlive {
 #[async_trait]
 impl KeepAliveTrait for KeepAlive {
     async fn get(&self, id: &str) -> Option<i64> {
-        self.keep_alives.get(id).await
+        let device_state = self.keep_alives.get(id).await;
+        device_state.map(|d| d.ts)
     }
 
     async fn pulse(&self, id: &str) -> i64 {
@@ -172,16 +171,11 @@ impl KeepAliveTrait for KeepAlive {
                 );
                 true
             }
-            Some(ts) => {
-                let delta = now - ts;
-
-                if delta
-                    > ((*DEAD_DEVICE_TIMEOUT + *CONSOLIDATION_WINDOW + Duration::from_secs(1))
-                        .as_millis() as i64)
-                {
+            Some(ds) => {
+                if ds.state == EventType::Dead {
                     debug!(
-                        "[pulse] this is a CONNECTED event. id: {} delta: {} (ts: {})",
-                        id, delta, now
+                        "[pulse] this is a CONNECTED event. because previous state is Dead. id: {} prev state: {:?} (ts: {})",
+                        id, ds, now,
                     );
                     true
                 } else {

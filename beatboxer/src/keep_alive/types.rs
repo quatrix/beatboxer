@@ -11,12 +11,20 @@ pub struct KeepAliveUpdate {
 }
 
 #[derive(Clone, Debug)]
+pub struct DeadUpdate {
+    pub id: String,
+    pub last_ka: i64,
+    pub ts_of_death: i64,
+}
+
+#[derive(Clone, Debug)]
 pub enum Message {
     Ping,
     KeepAliveUpdate(KeepAliveUpdate),
+    DeadUpdate(DeadUpdate),
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialOrd, PartialEq, Deserialize, Serialize)]
 pub enum EventType {
     Connected,
     Dead,

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use arrayvec::ArrayString;
+use beatboxer::keep_alive::SenderChannels;
 use beatboxer::{
     keep_alive::{
         constants::is_dead,
@@ -9,7 +9,6 @@ use beatboxer::{
     metrics::{setup_metrics_recorder, track_metrics},
     storage::{memory::InMemoryStorage, Storage},
 };
-use std::fmt::Write as _;
 
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
@@ -20,7 +19,7 @@ use beatboxer::storage::persistent::PersistentStorage;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::{future::ready, net::SocketAddr, sync::Arc};
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::{mpsc::Receiver, RwLock};
 
 use axum::{
     extract::{ws::WebSocket, ConnectInfo, Path, Query, State, WebSocketUpgrade},
@@ -31,7 +30,7 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser, Debug)]
@@ -56,7 +55,13 @@ struct Args {
 }
 
 #[cfg(feature = "rocksdb")]
-fn get_storage(use_rocksdb: bool, http_port: u16) -> Arc<dyn Storage + Sync + Send> {
+fn get_storage(
+    _txs: SenderChannels,
+    use_rocksdb: bool,
+    http_port: u16,
+) -> Arc<dyn Storage + Sync + Send> {
+    use beatboxer::keep_alive::SenderChannels;
+
     if use_rocksdb {
         Arc::new(PersistentStorage::new(&format!(
             "/tmp/beatboxer_{}.db",
@@ -68,11 +73,15 @@ fn get_storage(use_rocksdb: bool, http_port: u16) -> Arc<dyn Storage + Sync + Se
 }
 
 #[cfg(not(feature = "rocksdb"))]
-fn get_storage(use_rocksdb: bool, _http_port: u16) -> Arc<dyn Storage + Sync + Send> {
+fn get_storage(
+    txs: SenderChannels,
+    use_rocksdb: bool,
+    _http_port: u16,
+) -> Arc<dyn Storage + Sync + Send> {
     if use_rocksdb {
         panic!("build with --features=rocksdb to use this feature")
     } else {
-        Arc::new(InMemoryStorage::default())
+        Arc::new(InMemoryStorage::new(3_000_000, txs))
     }
 }
 
@@ -88,13 +97,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let storage = get_storage(args.use_rocksdb, args.http_port);
+    let txs = Arc::new(RwLock::new(Vec::new()));
+    let storage = get_storage(Arc::clone(&txs), args.use_rocksdb, args.http_port);
 
     let keep_alive = Arc::new(KeepAlive::new(
         &args.listen_addr,
         args.listen_port,
         args.nodes.clone(),
         storage,
+        Arc::clone(&txs),
     ));
     keep_alive.connect_to_nodes();
     keep_alive.start_background_tasks();
@@ -112,6 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/metrics", get(move || ready(recorder_handle.render())))
         .route("/ping", get(ping_handler))
         .route("/ready", get(ready_handler))
+        .route("/internal/die", get(die_handler))
         .route("/cluster_status", get(cluster_status_handler))
         .with_state(cloned_keep_alive);
 
@@ -134,6 +146,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn ping_handler() -> &'static str {
     "PONG"
+}
+
+async fn die_handler() {
+    warn!("been asked to die! goodbye cruel word!");
+    std::process::exit(0)
 }
 
 async fn pulse_handler(

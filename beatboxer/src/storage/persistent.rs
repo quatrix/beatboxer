@@ -15,7 +15,7 @@ use crate::keep_alive::{
     types::{Event, EventType},
 };
 
-use super::Storage;
+use super::{memory::zset::DeviceState, Storage};
 pub struct PersistentStorage {
     db: Arc<DB>,
 }
@@ -52,22 +52,36 @@ impl Storage for PersistentStorage {
         todo!("not implemented")
     }
 
-    async fn get(&self, id: &str) -> Option<i64> {
+    async fn last_event_ts(&self) -> Option<i64> {
+        todo!("not implemented")
+    }
+
+    async fn get(&self, id: &str) -> Option<DeviceState> {
+        /*
         match self.db.get(id) {
             Ok(Some(value)) => Some(i64::from_be_bytes(value.to_vec().try_into().unwrap())),
             Ok(None) => None,
             Err(e) => panic!("operational problem encountered: {}", e),
         }
+        */
+        todo!("not implemented")
     }
 
     async fn set(&self, id: &str, ts: i64, _is_connection_event: bool) {
         self.set_ts(id, ts).await;
     }
 
-    async fn bulk_set(&self, new_data: HashMap<String, i64>) {
+    async fn dead(&self, id: &str, last_ka: i64, ts_of_death: i64) {
+        todo!("not implemented")
+    }
+
+    async fn bulk_set(&self, new_data: HashMap<String, DeviceState>) {
+        /*
         for (id, ts) in new_data {
             self.set_ts(&id, ts).await;
         }
+        */
+        todo!("not implemented")
     }
 
     async fn serialize_state(&self) -> Result<Vec<u8>> {

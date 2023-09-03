@@ -47,8 +47,8 @@ async fn send_blob(
 
 impl KeepAlive {
     pub async fn subscribe_to_commands(&self, addr: SocketAddr) -> Receiver<Message> {
-        let (tx, rx) = mpsc::channel(102400);
         let mut txs = self.txs.write().await;
+        let (tx, rx) = mpsc::channel(102400);
         txs.push((addr.to_string(), tx));
 
         rx
@@ -144,6 +144,14 @@ async fn handle_client_commands(
                     debug!("[{}] Sent KA '{}'.", addr, write_buf);
                     Ok(())
                 }
+                Message::DeadUpdate(dd) => {
+                    let mut write_buf = ArrayString::<64>::new();
+                    writeln!(write_buf, "DD {} {} {}", dd.id, dd.last_ka, dd.ts_of_death)?;
+                    debug!("[{}] Sending DD '{}'...", addr, write_buf);
+                    let _ = timeout(*SOCKET_WRITE_TIMEOUT, socket.write_all(write_buf.as_bytes())).await?;
+                    debug!("[{}] Sent DD '{}'.", addr, write_buf);
+                    Ok(())
+                }
             },
             None => {
                 Err(anyhow!("[{}] Error receiving from channel", addr))
@@ -167,6 +175,12 @@ async fn sync_with_client(
     if n == 5 && buf[0..n] == *b"SYNC\n" {
         let t0 = std::time::Instant::now();
         let state = kac.serialize_state().await?;
+
+        match kac.last_event_ts().await {
+            Some(last_event_ts) => info!("[{}] sending events up to {}", addr, last_event_ts),
+            None => info!("[{}] events is empty", addr),
+        };
+
         let events = kac.serialize_events().await?;
 
         info!(

@@ -1,12 +1,29 @@
 use atomic_counter::{AtomicCounter, RelaxedCounter};
 use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
+use crate::keep_alive::types::EventType;
+
 pub struct ZSet {
-    pub scores: DashMap<String, u128>,
+    pub scores: DashMap<String, DeviceState>,
     elements: SkipMap<u128, String>,
     counter: RelaxedCounter,
+}
+
+#[derive(Clone, Deserialize, Serialize, Debug, PartialEq, PartialOrd)]
+pub struct DeviceState {
+    #[serde(skip)]
+    score: u128,
+    pub ts: i64,
+    pub state: EventType,
+    pub state_ts: i64,
+}
+
+pub struct State {
+    pub state: EventType,
+    pub state_ts: i64,
 }
 
 impl Default for ZSet {
@@ -32,11 +49,29 @@ impl ZSet {
         self.len() == 0
     }
 
-    pub fn get(&self, value: &str) -> Option<i64> {
-        self.scores.get(value).map(|v| (*v >> 64) as i64)
+    pub fn get(&self, value: &str) -> Option<DeviceState> {
+        self.scores.get(value).map(|v| v.clone())
     }
 
-    pub fn update(&self, value: &str, score: i64) {
+    pub fn update_state(&self, value: &str, state: State) {
+        match self.scores.entry(value.to_string()) {
+            dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
+                let cds = occupied.get();
+
+                occupied.insert(DeviceState {
+                    ts: cds.ts,
+                    score: cds.score,
+                    state: state.state,
+                    state_ts: state.state_ts,
+                });
+            }
+            dashmap::mapref::entry::Entry::Vacant(_) => {
+                error!("trying to update a device that doesn't exist: {:?}", value);
+            }
+        }
+    }
+
+    pub fn update(&self, value: &str, score: i64, state: Option<State>) {
         // the score is actually a timestamp in millis
         // there could be multiple updates for the same millisecond
         // the skip_list stores ts -> device_id, so to enable
@@ -51,31 +86,57 @@ impl ZSet {
 
         match self.scores.entry(value.to_string()) {
             dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
-                let old_score = occupied.get();
+                let cds = occupied.get();
 
-                if old_score > &score {
+                // if we have a newer state, ignore the update, it's stale
+                if cds.score > score {
                     return;
                 }
 
-                self.elements.remove(old_score);
-                occupied.insert(score);
+                let (state, state_ts) = match state {
+                    Some(state) => (state.state, state.state_ts),
+                    None => (cds.state, cds.state_ts),
+                };
+
+                self.elements.remove(&cds.score);
+                occupied.insert(DeviceState {
+                    ts: original_score,
+                    score,
+                    state,
+                    state_ts,
+                });
             }
-            dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                vacant.insert(score);
-            }
+            dashmap::mapref::entry::Entry::Vacant(vacant) => match state {
+                Some(state) => {
+                    vacant.insert(DeviceState {
+                        ts: original_score,
+                        score,
+                        state: state.state,
+                        state_ts: state.state_ts,
+                    });
+                }
+                None => {
+                    // if we got heartbeat, but we haven't seen it before
+                    // it's probably a connect event we didn't get yet...
+                    // so we can assume it's a CONNECT and consolidate later.
+                    vacant.insert(DeviceState {
+                        ts: original_score,
+                        score,
+                        state: EventType::Connected,
+                        state_ts: original_score,
+                    });
+                }
+            },
         }
 
-        debug!(
-            "[ZSET] storing id {} score: {} ts: {}",
-            value, score, original_score
-        );
+        //debug!( "[ZSET] storing id {} score: {} ts: {}", value, score, original_score);
         self.elements.insert(score, value.to_string());
     }
 
     pub fn pop_lower_than_score(&self, max_score: i64) -> Vec<(String, i64)> {
         let mut res = vec![];
 
-        debug!("[ZSET] poping max_score: {}", max_score);
+        //debug!("[ZSET] poping max_score: {}", max_score);
         let max_score = max_score as u128;
         let max_score = max_score << 64;
 
@@ -91,12 +152,7 @@ impl ZSet {
                     let original_score = p_element.key();
                     let original_score = (original_score >> 64) as i64;
 
-                    debug!(
-                        "[ZSET] returning {} - {}",
-                        p_element.value(),
-                        original_score
-                    );
-
+                    // debug!( "[ZSET] returning {} - {}", p_element.value(), original_score);
                     res.push((p_element.value().to_string(), original_score));
                 }
                 None => {

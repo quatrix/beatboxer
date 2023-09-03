@@ -60,7 +60,9 @@ impl NotificationDispatcher {
             let txs = self.txs.read().await;
             for tx in txs.iter() {
                 match tx.try_send(event.clone()) {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        //info!("sending notification: {:?} to {:?}", event, tx);
+                    }
                     Err(TrySendError::Closed(_)) => {
                         error!("(subscriber) Channel closed.");
                         gc_senders = true;

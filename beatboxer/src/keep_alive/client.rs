@@ -4,7 +4,7 @@ use crate::{
         constants::{CONSOLIDATION_WINDOW, SOCKET_READ_LONG_TIMEOUT, SOCKET_WRITE_TIMEOUT},
         types::Event,
     },
-    storage::Storage,
+    storage::{memory::zset::DeviceState, Storage},
 };
 
 use super::KeepAlive;
@@ -99,7 +99,7 @@ async fn do_sync(
     let t_e2e_0 = std::time::Instant::now();
 
     write(socket, b"SYNC\n").await?;
-    let ka = read_blob::<HashMap<String, i64>>("STATE", socket, addr).await?;
+    let ka = read_blob::<HashMap<String, DeviceState>>("STATE", socket, addr).await?;
     let events = read_blob::<VecDeque<Event>>("EVENTS", socket, addr).await?;
 
     info!("[🔄] Got state + events from {}...", addr);
@@ -138,8 +138,16 @@ struct KaCommand {
 }
 
 #[derive(Debug, PartialEq)]
+struct DeadCommand {
+    id: String,
+    last_ka: i64,
+    ts_of_death: i64,
+}
+
+#[derive(Debug, PartialEq)]
 enum Command {
     KA(KaCommand),
+    Dead(DeadCommand),
     ParseError(String),
     Unknown(String),
     Ping,
@@ -181,6 +189,40 @@ fn parse_ka(input: &str) -> IResult<&str, Command> {
     ))
 }
 
+fn parse_dead(input: &str) -> IResult<&str, Command> {
+    let mut parser = tuple((
+        tag("DD"),
+        multispace1,
+        alphanumeric1,
+        multispace1,
+        digit1,
+        multispace1,
+        digit1,
+    ));
+
+    let (input, (_, _, id_str, _, last_ka_str, _, ts_of_death_str)) = parser(input)?;
+
+    let id = id_str.to_string();
+    let last_ka = match last_ka_str.parse::<i64>() {
+        Ok(ts) => ts,
+        Err(e) => return Ok((input, Command::ParseError(e.to_string()))),
+    };
+
+    let ts_of_death = match ts_of_death_str.parse::<i64>() {
+        Ok(ts) => ts,
+        Err(e) => return Ok((input, Command::ParseError(e.to_string()))),
+    };
+
+    Ok((
+        input,
+        Command::Dead(DeadCommand {
+            id,
+            last_ka,
+            ts_of_death,
+        }),
+    ))
+}
+
 fn parse_ping(input: &str) -> IResult<&str, Command> {
     let (input, _) = tag("PING")(input)?;
     Ok((input, Command::Ping))
@@ -192,7 +234,7 @@ fn parse_closed(input: &str) -> IResult<&str, Command> {
 }
 
 fn parse_command(input: &str) -> Command {
-    let (rest, cmd) = alt((parse_closed, parse_ka, parse_ping))(input)
+    let (rest, cmd) = alt((parse_closed, parse_ka, parse_dead, parse_ping))(input)
         .unwrap_or((input, Command::Unknown(input.to_string())));
     if rest.trim().is_empty() {
         cmd
@@ -215,11 +257,19 @@ impl KeepAlive {
             let cluster_status = Arc::clone(&self.cluster_status);
 
             tokio::spawn(async move {
+                let mut printed_connecting = false;
+                let mut printed_conn_error = false;
                 loop {
-                    info!("Connecting to {}", addr);
+                    if !printed_connecting {
+                        info!("Connecting to {}", addr);
+                        printed_connecting = true;
+                    }
 
                     match TcpStream::connect(&addr).await {
                         Ok(socket) => {
+                            printed_connecting = false;
+                            printed_conn_error = false;
+
                             let mut socket = BufReader::new(socket);
 
                             match do_sync(&addr, &mut socket, &kac).await {
@@ -265,8 +315,14 @@ impl KeepAlive {
                                             "addr" => addr.to_string(),
                                         );
 
-                                        debug!("got KA from {} - event: {:?}", addr, ka);
+                                        if ka.is_connection_event {
+                                            debug!("got KA from {} - event: {:?}", addr, ka);
+                                        }
                                         kac.set(&ka.id, ka.ts, ka.is_connection_event).await;
+                                    }
+                                    Command::Dead(dd) => {
+                                        //info!("[{}] got DD update: {:?}", addr, dd);
+                                        kac.dead(&dd.id, dd.last_ka, dd.ts_of_death).await;
                                     }
                                     Command::Ping => {
                                         if let Err(e) = write(&mut socket, b"PONG\n").await {
@@ -289,7 +345,10 @@ impl KeepAlive {
                         }
                         Err(e) => {
                             cluster_status.set_node_status(&addr, NodeStatus::Dead);
-                            error!("[{}] Error connecting: {}, trying again...", addr, e);
+                            if !printed_conn_error {
+                                error!("[{}] Error connecting: {}, trying again...", addr, e);
+                                printed_conn_error = true;
+                            }
                             tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                     }

@@ -1,0 +1,23 @@
+[package]
+name = "stresser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+adjacent-pair-iterator = "1.0.0"
+anyhow = "1.0.72"
+barrage = "0.2.3"
+chrono = "0.4.28"
+clap = { version = "4.3.19", features = ["derive"] }
+futures = "0.3.28"
+gethostname = "0.4.3"
+histogram = "0.7.4"
+kanal = "0.1.0-pre8"
+prost = "0.11.9"
+rand = "0.8.5"
+random-string = "1.0.0"
+reqwest = "0.11.18"
+tokio = { version = "1.29.1", features = ["macros", "rt-multi-thread", "sync", "net", "io-std", "io-util"] }
+tokio-tungstenite = { version = "0.20.0" }
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }

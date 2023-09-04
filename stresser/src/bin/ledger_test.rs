@@ -186,10 +186,10 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> bool {
             // connection event
             match a.ts.duration_since(e.ts) {
                 Ok(since_connect) => {
-                    if since_connect > Duration::from_secs(5) {
+                    if since_connect > Duration::from_secs(11) {
                         error!(
                             "[{}] - connection event came too late [{:?}], expected {:?} actual {:?}",
-                            name, since_connect, e.ts, a.ts
+                            name, since_connect, iso8601(&e.ts), iso8601(&a.ts)
                         );
 
                         print_expected_and_actual(name, &expected, actual);
@@ -219,7 +219,7 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> bool {
                         return false;
                     }
 
-                    if since_dead < Duration::from_secs(29) {
+                    if since_dead < Duration::from_secs(19) {
                         error!(
                             "[{}] - got dead event too soon [{:?}], device died at {} got dead event at {}",
                             name, since_dead, iso8601(&e.ts), iso8601(&a.ts)

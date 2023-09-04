@@ -20,7 +20,7 @@ pub struct Config {
     #[arg(long, default_value = "10000")]
     pub time_between_beats_ms: u64,
 
-    #[arg(long, default_value = "0.1")]
+    #[arg(long, default_value = "0.0")]
     pub skip_probability: f32,
 
     #[arg(long, default_value = "0.05")]

@@ -1,0 +1,16 @@
+[package]
+name = "coyote"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.75"
+chrono = "0.4.28"
+clap = { version = "4.4.2", features = ["env", "derive"] }
+rand = "0.8.5"
+reqwest = "0.11.20"
+tokio = { version = "1.32.0", features = ["macros", "rt-multi-thread", "sync", "net", "io-util", "time"] }
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }

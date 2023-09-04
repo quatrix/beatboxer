@@ -5,9 +5,9 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{error, info};
 
-use crate::keep_alive::types::Event;
+use crate::keep_alive::types::{Event, EventType};
 
 pub struct Events {
     max_history_size: usize,
@@ -118,17 +118,38 @@ impl Events {
 }
 
 fn merge_without_duplicates(a: &VecDeque<Event>, b: &VecDeque<Event>) -> VecDeque<Event> {
-    let mut result = VecDeque::new();
+    let mut joined = VecDeque::new();
     let mut seen = HashSet::new();
 
     for item in a.iter().chain(b.iter()) {
         if !seen.contains(&item) {
-            result.push_back(item.clone());
+            joined.push_back(item.clone());
             seen.insert(item);
         }
     }
 
-    result.make_contiguous().sort();
+    joined.make_contiguous().sort();
+
+    let mut result = VecDeque::new();
+    let mut connected: HashSet<String> = HashSet::new();
+
+    for event in joined {
+        if event.typ == EventType::Connected {
+            // if we already seen a connected event for this id, drop it
+            if connected.contains(&event.id) {
+                continue;
+            } else {
+                connected.insert(event.id.clone());
+            }
+        } else if event.typ == EventType::Dead {
+            // if we see dead event, we can clear the connected set
+            connected.remove(&event.id);
+        } else {
+            error!("wat, got unexpected event {:?}", event);
+        }
+
+        result.push_back(event);
+    }
 
     result
 }

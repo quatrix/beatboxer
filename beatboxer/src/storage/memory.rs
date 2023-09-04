@@ -42,7 +42,6 @@ pub struct InMemoryStorage {
     events_history: Arc<Events>,
     notification_dispatcher: Arc<NotificationDispatcher>,
     max_history_size: usize,
-    dead_lock: Arc<RwLock<()>>,
 }
 
 impl InMemoryStorage {
@@ -58,7 +57,6 @@ impl InMemoryStorage {
             events_history: Arc::clone(&events_history),
             notification_dispatcher: Arc::clone(&notification_dispatcher),
             max_history_size,
-            dead_lock: Arc::new(RwLock::new(())),
         }
     }
 
@@ -114,7 +112,6 @@ impl InMemoryStorage {
         let events_history = Arc::clone(&self.events_history);
         let notification_dispatcher = Arc::clone(&self.notification_dispatcher);
         let txs = Arc::clone(&self.txs);
-        let dead_lock = Arc::clone(&self.dead_lock);
 
         tokio::spawn(async move {
             loop {
@@ -165,7 +162,6 @@ impl InMemoryStorage {
 
                         match keep_alives_c.get(&id) {
                             Some(ds) => {
-                                //let _lock = dead_lock.write().await;
                                 //info!("detected dead for {} (ds: {:?})", id, ds);
 
                                 let event = Event {
@@ -174,7 +170,7 @@ impl InMemoryStorage {
                                     typ: EventType::Dead,
                                 };
 
-                                if ds.state == EventType::Connected {
+                                if ds.state == EventType::Connected && deadline >= ds.state_ts {
                                     //events_buffer.store_event(event.clone()).await;
                                     notification_dispatcher.notify(&event).await;
                                     let _ = events_history.store_event(event.clone()).await;
@@ -264,7 +260,6 @@ impl Storage for InMemoryStorage {
     async fn dead(&self, id: &str, last_ka: i64, ts_of_death: i64) {
         // FIXME: just testing if this helps
         // in reality we need a lock per id, not a global one lock.
-        //let _lock = self.dead_lock.write().await;
 
         let dead = State {
             state: EventType::Dead,
@@ -279,21 +274,7 @@ impl Storage for InMemoryStorage {
 
         match self.keep_alives.get(id) {
             Some(ds) => {
-                if ds.state == EventType::Dead {
-                    //let events = self.events_history.get_all_events_from_id(id).await;
-                    //error!("it's a dead event, but last event is already a dead event! ignoring. id: {:?} ds: {:?} [events: {:?}]", id, ds, events);
-                    //
-
-                    //if ds.state_ts == ts_of_death {
-                    //    warn!(
-                    //        "resending dead event id: {:?} ts: {:?} ds: : {:?}",
-                    //        id, ts_of_death, ds
-                    //    );
-
-                    //    self.notification_dispatcher.notify(&event).await;
-                    //}
-                } else {
-                    //info!("storing dead for {} (ds: {:?})", id, ds);
+                if ds.state == EventType::Connected && ts_of_death >= ds.state_ts {
                     self.notification_dispatcher.notify(&event).await;
                     let _ = self.events_history.store_event(event.clone()).await;
                     self.keep_alives.update_state(id, dead);
@@ -331,7 +312,7 @@ impl Storage for InMemoryStorage {
                     // FIXME: maybe we need to check the udpate time of that event... maybe it's
                     // old
 
-                    if ds.state == EventType::Dead {
+                    if ds.state == EventType::Dead && ts >= ds.state_ts {
                         debug!("events_buffer.store_event({:?})", event);
                         //self.events_buffer.store_event(event.clone()).await;
                         self.notification_dispatcher.notify(&event).await;

@@ -176,8 +176,8 @@ impl InMemoryStorage {
 
                                 if ds.state == EventType::Connected {
                                     //events_buffer.store_event(event.clone()).await;
-                                    let _ = events_history.store_event(event.clone()).await;
                                     notification_dispatcher.notify(&event).await;
+                                    let _ = events_history.store_event(event.clone()).await;
 
                                     keep_alives_c.update_state(
                                         &id,
@@ -217,14 +217,14 @@ impl InMemoryStorage {
                                     //
                                     //
                                     //
-                                    if ds.state == EventType::Dead && ds.state_ts == ts {
-                                        warn!(
-                                            "resending dead event id: {:?} ts: {:?} ds: : {:?}",
-                                            id, ts, ds
-                                        );
+                                    //if ds.state == EventType::Dead && ds.state_ts == ts {
+                                    //    warn!(
+                                    //        "resending dead event id: {:?} ts: {:?} ds: : {:?}",
+                                    //        id, ts, ds
+                                    //    );
 
-                                        notification_dispatcher.notify(&event).await;
-                                    }
+                                    //    notification_dispatcher.notify(&event).await;
+                                    //}
                                 }
                             }
                             None => {
@@ -284,18 +284,18 @@ impl Storage for InMemoryStorage {
                     //error!("it's a dead event, but last event is already a dead event! ignoring. id: {:?} ds: {:?} [events: {:?}]", id, ds, events);
                     //
 
-                    if ds.state_ts == ts_of_death {
-                        warn!(
-                            "resending dead event id: {:?} ts: {:?} ds: : {:?}",
-                            id, ts_of_death, ds
-                        );
+                    //if ds.state_ts == ts_of_death {
+                    //    warn!(
+                    //        "resending dead event id: {:?} ts: {:?} ds: : {:?}",
+                    //        id, ts_of_death, ds
+                    //    );
 
-                        self.notification_dispatcher.notify(&event).await;
-                    }
+                    //    self.notification_dispatcher.notify(&event).await;
+                    //}
                 } else {
                     //info!("storing dead for {} (ds: {:?})", id, ds);
-                    let _ = self.events_history.store_event(event.clone()).await;
                     self.notification_dispatcher.notify(&event).await;
+                    let _ = self.events_history.store_event(event.clone()).await;
                     self.keep_alives.update_state(id, dead);
                 }
             }
@@ -334,21 +334,21 @@ impl Storage for InMemoryStorage {
                     if ds.state == EventType::Dead {
                         debug!("events_buffer.store_event({:?})", event);
                         //self.events_buffer.store_event(event.clone()).await;
-                        let _ = self.events_history.store_event(event.clone()).await;
                         self.notification_dispatcher.notify(&event).await;
+                        let _ = self.events_history.store_event(event.clone()).await;
                         self.set_ka(id, ts, Some(connected)).await;
                     } else {
                         //let events = self.events_history.get_all_events_from_id(id).await;
                         //error!("connected event, but last connected event! ignoring. id: {:?} ts: {:?} ds: : {:?} [events: {:?}]", id, ts, ds, events);
 
                         // if it's the same event, send it again, for good measure
-                        if ds.state == EventType::Connected && ds.state_ts == ts {
-                            warn!(
-                                "resending connect event id: {:?} ts: {:?} ds: : {:?}",
-                                id, ts, ds
-                            );
-                            self.notification_dispatcher.notify(&event).await;
-                        }
+                        // if ds.state == EventType::Connected && ds.state_ts == ts {
+                        //     warn!(
+                        //         "resending connect event id: {:?} ts: {:?} ds: : {:?}",
+                        //         id, ts, ds
+                        //     );
+                        //     self.notification_dispatcher.notify(&event).await;
+                        // }
                     }
                 }
                 None => {
@@ -360,8 +360,8 @@ impl Storage for InMemoryStorage {
 
                     debug!("events_buffer.store_event({:?})", event);
                     //self.events_buffer.store_event(event.clone()).await;
-                    let _ = self.events_history.store_event(event.clone()).await;
                     self.notification_dispatcher.notify(&event).await;
+                    let _ = self.events_history.store_event(event.clone()).await;
                     self.set_ka(id, ts, Some(connected)).await;
                 }
             }

@@ -6,7 +6,10 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::connect_async;
 use tracing::{debug, error, info};
 
-use crate::strategies::Strategy;
+use crate::{
+    event::iso8601,
+    strategies::{ledger::millis_to_systemtime, Strategy},
+};
 
 pub async fn ws_client(
     mut rx: oneshot::Receiver<()>,
@@ -16,20 +19,35 @@ pub async fn ws_client(
 ) -> impl Strategy {
     let mut done = false;
     let mut seen = HashSet::new();
-    let mut offset = -1;
+    let mut offset = None;
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(300))
         .build()
         .unwrap();
 
+    let mut printed_offset_msg = false;
     let mut printed_waiting_msg = false;
 
     while !done {
         let ws_uri = match offset {
-            -1 => format!("ws://{node}/updates"),
-            n => format!("ws://{node}/updates?offset={}", n - 60_000),
+            None => format!("ws://{node}/updates"),
+            Some(n) => {
+                let asked_offset = n - 30_000;
+                if !printed_offset_msg {
+                    info!(
+                        "[{}] ts of last update: {} (asking for offset {})",
+                        node,
+                        iso8601(&millis_to_systemtime(n)),
+                        iso8601(&millis_to_systemtime(asked_offset))
+                    );
+                    printed_offset_msg = true;
+                }
+
+                format!("ws://{node}/updates?offset={}", asked_offset)
+            }
         };
+
         if !printed_waiting_msg {
             info!("waiting for node {} to become ready...", node);
             printed_waiting_msg = true;
@@ -70,6 +88,7 @@ pub async fn ws_client(
 
         info!("connected to {}!", ws_uri);
         printed_waiting_msg = false;
+        printed_offset_msg = false;
 
         let (_, mut receiver) = ws_stream.split();
 
@@ -98,7 +117,7 @@ pub async fn ws_client(
 
                             strategy.add_event(msg.to_string());
 
-                            offset = ts;
+                            offset = Some(ts);
 
                             if state == "CONNECTED" {
                                 strategy.on_connect(id.to_string(), ts);

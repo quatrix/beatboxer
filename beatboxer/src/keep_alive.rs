@@ -5,8 +5,9 @@ pub mod server;
 pub mod types;
 
 use anyhow::Result;
+use dashmap::DashMap;
 use serde::Serialize;
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::mpsc::{error::TrySendError, Receiver, Sender};
 
 use axum::async_trait;
@@ -26,6 +27,7 @@ pub struct KeepAlive {
     listen_port: u16,
     nodes: Vec<String>,
     keep_alives: Arc<dyn Storage + Send + Sync>,
+    locks: DashMap<String, RwLock<()>>,
     txs: SenderChannels,
     cluster_status: Arc<ClusterStatus>,
 }
@@ -100,6 +102,7 @@ impl KeepAlive {
             keep_alives: storage,
             txs,
             cluster_status: Arc::new(ClusterStatus::new(nodes)),
+            locks: DashMap::new(),
         }
     }
 
@@ -158,6 +161,9 @@ impl KeepAliveTrait for KeepAlive {
     }
 
     async fn pulse(&self, id: &str) -> i64 {
+        let lock = self.locks.entry(id.to_string()).or_insert(RwLock::new(()));
+        let _locked = lock.write().await;
+
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

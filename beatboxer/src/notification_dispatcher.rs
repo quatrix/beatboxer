@@ -1,5 +1,6 @@
 use anyhow::Result;
-use std::{sync::Arc, time::Duration};
+use lru::LruCache;
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use tokio::sync::{
     mpsc::{self, error::TrySendError, Receiver, Sender},
@@ -7,12 +8,13 @@ use tokio::sync::{
 };
 use tracing::{error, info};
 
-use crate::keep_alive::types::Event;
+use crate::keep_alive::types::{Event, EventType};
 use crate::storage::memory::events::Events;
 
 pub struct NotificationDispatcher {
     txs: Arc<RwLock<Vec<Sender<Event>>>>,
     events_history: Arc<Events>,
+    sent_events: RwLock<LruCache<Event, ()>>,
 }
 
 impl NotificationDispatcher {
@@ -20,6 +22,7 @@ impl NotificationDispatcher {
         NotificationDispatcher {
             txs: Arc::new(RwLock::new(Vec::new())),
             events_history,
+            sent_events: RwLock::new(LruCache::new(NonZeroUsize::new(10000).unwrap())),
         }
     }
 
@@ -54,6 +57,20 @@ impl NotificationDispatcher {
     }
 
     pub async fn notify(&self, event: &Event) {
+        if event.typ == EventType::Dead {
+            // since we get Dead events from all nodes
+            // we don't want to notify for each of those,
+            // but only for the first we see.
+            {
+                let mut sent_events = self.sent_events.write().await;
+                if sent_events.contains(&event) {
+                    return;
+                } else {
+                    sent_events.put(event.clone(), ());
+                }
+            }
+        }
+
         let mut gc_senders = false;
 
         {

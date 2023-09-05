@@ -17,7 +17,7 @@ pub async fn pulser(
     ids_rx: AsyncReceiver<String>,
 ) {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(1000))
+        .timeout(Duration::from_millis(5000))
         .build()
         .unwrap();
 

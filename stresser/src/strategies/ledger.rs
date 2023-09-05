@@ -34,7 +34,7 @@ impl Ledger {
     }
 }
 
-fn millis_to_systemtime(millis: i64) -> SystemTime {
+pub fn millis_to_systemtime(millis: i64) -> SystemTime {
     let duration_since_epoch = Duration::from_millis(millis as u64);
     SystemTime::UNIX_EPOCH + duration_since_epoch
 }

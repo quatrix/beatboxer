@@ -26,6 +26,12 @@ pub struct Config {
     #[arg(long, default_value = "0.05")]
     pub death_probability: f32,
 
+    #[arg(long, default_value = "0.05")]
+    pub node_death_probability: f32,
+
+    #[arg(long, default_value = "5000")]
+    pub chaos_interval_ms: u64,
+
     #[arg(long, default_value = "5")]
     pub death_rounds: u32,
 

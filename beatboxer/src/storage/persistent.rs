@@ -67,7 +67,7 @@ impl Storage for PersistentStorage {
         todo!("not implemented")
     }
 
-    async fn set(&self, id: &str, ts: i64, _is_connection_event: bool) {
+    async fn set(&self, id: &str, ts: i64, _is_connection_event: bool, _from_node_msg: bool) {
         self.set_ts(id, ts).await;
     }
 

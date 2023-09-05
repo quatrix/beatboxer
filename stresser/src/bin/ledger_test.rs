@@ -2,6 +2,7 @@ use chrono::Utc;
 use clap::Parser;
 use itertools::Itertools;
 use stresser::config::Config;
+use stresser::coyote::start_the_chaos;
 use stresser::event::{iso8601, Event, EventType};
 use stresser::id_generation::generate_ids;
 use stresser::pulser::pulser;
@@ -76,6 +77,12 @@ async fn main() {
         let config = Arc::clone(&config);
         pulses_futures.push(tokio::spawn(pulser(None, config, ids_rx.clone())));
     }
+
+    tokio::spawn(start_the_chaos(
+        config.nodes.clone(),
+        config.node_death_probability,
+        Duration::from_millis(config.chaos_interval_ms),
+    ));
 
     /*
     let ids = (0..config.total_ids)
@@ -160,6 +167,7 @@ fn compare_results(
                 if r == DiffResult::Ok {
                     same += 1;
                 } else {
+                    print_expected_and_actual(name, ledger, actual_ledger);
                     diff += 1;
                 }
 
@@ -190,7 +198,7 @@ fn compare_results(
     diff == 0 && not_found == 0
 }
 
-fn print_expected_and_actual(name: &str, expected: &Vec<&Event>, actual: &Vec<Event>) {
+fn print_expected_and_actual(name: &str, expected: &Vec<Event>, actual: &Vec<Event>) {
     error!("[{}] - expected:", name);
 
     for e in expected {
@@ -225,20 +233,20 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
         .filter(|e| e.event != EventType::Beat && e.event != EventType::Skip)
         .collect::<Vec<&Event>>();
 
+    for (a_1, a_2) in actual.iter().tuple_windows() {
+        if a_1.event == EventType::Connect && a_1.event == a_2.event {
+            error!("two CONNECT in a row");
+            return DiffResult::TwoConnects;
+        }
+
+        if a_1.event == EventType::Dead && a_1.event == a_2.event {
+            error!("two DEAD in a row");
+            return DiffResult::TwoDeads;
+        }
+    }
+
     if expected.len() != actual.len() {
         error!("[{}] - not the same events!", name);
-
-        print_expected_and_actual(name, &expected, actual);
-
-        while let Some((a_1, a_2)) = actual.iter().next_tuple() {
-            if a_1.event == EventType::Connect && a_1.event == a_2.event {
-                return DiffResult::TwoConnects;
-            }
-
-            if a_1.event == EventType::Dead && a_1.event == a_2.event {
-                return DiffResult::TwoDeads;
-            }
-        }
 
         if expected.len() > actual.len() {
             return DiffResult::MissingEvents;
@@ -251,7 +259,6 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
         if e.event != a.event {
             error!("[{}] - expected {:?} got {:?}", name, e.event, a.event);
 
-            print_expected_and_actual(name, &expected, actual);
             return DiffResult::UnexpectedEvent;
         }
 
@@ -266,14 +273,12 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
                             name, since_connect, iso8601(&e.ts), iso8601(&a.ts)
                         );
 
-                        print_expected_and_actual(name, &expected, actual);
                         return DiffResult::ConnectTooLate;
                     }
                 }
                 Err(d) => {
                     if d.duration() > Duration::from_millis(100) {
                         error!("[{}] - actual connect came before expected?? {:?}", name, d);
-                        print_expected_and_actual(name, &expected, actual);
                         return DiffResult::ConnectTooSoon;
                     }
                 }
@@ -288,7 +293,6 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
                             "[{}] - got dead event too late [{:?}], device died at {} got dead event at {}",
                             name, since_dead, iso8601(&e.ts), iso8601(&a.ts)
                         );
-                        print_expected_and_actual(name, &expected, actual);
 
                         return DiffResult::DeadTooLate;
                     }
@@ -299,7 +303,6 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
                             name, since_dead, iso8601(&e.ts), iso8601(&a.ts)
                         );
 
-                        print_expected_and_actual(name, &expected, actual);
                         return DiffResult::DeadTooSoon;
                     }
                 }

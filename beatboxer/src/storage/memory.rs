@@ -24,6 +24,7 @@ use self::{
 use super::Storage;
 use anyhow::Result;
 use axum::async_trait;
+use dashmap::DashMap;
 use postcard::to_allocvec;
 use tokio::sync::{
     mpsc::{error::TrySendError, Receiver},
@@ -42,6 +43,7 @@ pub struct InMemoryStorage {
     events_history: Arc<Events>,
     notification_dispatcher: Arc<NotificationDispatcher>,
     max_history_size: usize,
+    dead_locks: Arc<DashMap<String, RwLock<()>>>,
 }
 
 impl InMemoryStorage {
@@ -57,6 +59,7 @@ impl InMemoryStorage {
             events_history: Arc::clone(&events_history),
             notification_dispatcher: Arc::clone(&notification_dispatcher),
             max_history_size,
+            dead_locks: Arc::new(DashMap::new()),
         }
     }
 
@@ -112,6 +115,7 @@ impl InMemoryStorage {
         let events_history = Arc::clone(&self.events_history);
         let notification_dispatcher = Arc::clone(&self.notification_dispatcher);
         let txs = Arc::clone(&self.txs);
+        let dead_locks = Arc::clone(&self.dead_locks);
 
         tokio::spawn(async move {
             loop {
@@ -163,6 +167,9 @@ impl InMemoryStorage {
                         match keep_alives_c.get(&id) {
                             Some(ds) => {
                                 //info!("detected dead for {} (ds: {:?})", id, ds);
+                                let lock =
+                                    dead_locks.entry(id.to_string()).or_insert(RwLock::new(()));
+                                let _locked = lock.write().await;
 
                                 let event = Event {
                                     ts: deadline,
@@ -213,14 +220,14 @@ impl InMemoryStorage {
                                     //
                                     //
                                     //
-                                    //if ds.state == EventType::Dead && ds.state_ts == ts {
-                                    //    warn!(
-                                    //        "resending dead event id: {:?} ts: {:?} ds: : {:?}",
-                                    //        id, ts, ds
-                                    //    );
+                                    if ds.state == EventType::Dead && ds.state_ts == ts {
+                                        //warn!(
+                                        //    "resending dead event id: {:?} ts: {:?} ds: : {:?}",
+                                        //    id, ts, ds
+                                        //);
 
-                                    //    notification_dispatcher.notify(&event).await;
-                                    //}
+                                        notification_dispatcher.notify(&event).await;
+                                    }
                                 }
                             }
                             None => {
@@ -260,6 +267,12 @@ impl Storage for InMemoryStorage {
     async fn dead(&self, id: &str, last_ka: i64, ts_of_death: i64) {
         // FIXME: just testing if this helps
         // in reality we need a lock per id, not a global one lock.
+        let lock = self
+            .dead_locks
+            .entry(id.to_string())
+            .or_insert(RwLock::new(()));
+
+        let _locked = lock.write().await;
 
         let dead = State {
             state: EventType::Dead,
@@ -278,6 +291,8 @@ impl Storage for InMemoryStorage {
                     self.notification_dispatcher.notify(&event).await;
                     let _ = self.events_history.store_event(event.clone()).await;
                     self.keep_alives.update_state(id, dead);
+                } else if ds.state == EventType::Dead && ds.state_ts == ts_of_death {
+                    self.notification_dispatcher.notify(&event).await;
                 }
             }
             None => {
@@ -321,15 +336,19 @@ impl Storage for InMemoryStorage {
                     } else {
                         //let events = self.events_history.get_all_events_from_id(id).await;
                         //error!("connected event, but last connected event! ignoring. id: {:?} ts: {:?} ds: : {:?} [events: {:?}]", id, ts, ds, events);
+                        //error!(
+                        //    "ignoring storing connected event! id: {:?} ts: {:?} ds: : {:?}",
+                        //    id, ts, ds
+                        //);
 
                         // if it's the same event, send it again, for good measure
-                        // if ds.state == EventType::Connected && ds.state_ts == ts {
-                        //     warn!(
-                        //         "resending connect event id: {:?} ts: {:?} ds: : {:?}",
-                        //         id, ts, ds
-                        //     );
-                        //     self.notification_dispatcher.notify(&event).await;
-                        // }
+                        if ds.state == EventType::Connected && ds.state_ts == ts {
+                            //warn!(
+                            //    "resending connect event id: {:?} ts: {:?} ds: : {:?}",
+                            //    id, ts, ds
+                            //);
+                            self.notification_dispatcher.notify(&event).await;
+                        }
                     }
                 }
                 None => {

@@ -1,5 +1,6 @@
 pub mod checker;
 pub mod config;
+pub mod coyote;
 pub mod event;
 pub mod id_generation;
 pub mod pulse;

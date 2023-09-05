@@ -167,9 +167,9 @@ impl InMemoryStorage {
                         match keep_alives_c.get(&id) {
                             Some(ds) => {
                                 //info!("detected dead for {} (ds: {:?})", id, ds);
-                                let lock =
-                                    dead_locks.entry(id.to_string()).or_insert(RwLock::new(()));
-                                let _locked = lock.write().await;
+                                //let lock =
+                                //    dead_locks.entry(id.to_string()).or_insert(RwLock::new(()));
+                                //let _locked = lock.write().await;
 
                                 let event = Event {
                                     ts: deadline,
@@ -267,12 +267,12 @@ impl Storage for InMemoryStorage {
     async fn dead(&self, id: &str, last_ka: i64, ts_of_death: i64) {
         // FIXME: just testing if this helps
         // in reality we need a lock per id, not a global one lock.
-        let lock = self
-            .dead_locks
-            .entry(id.to_string())
-            .or_insert(RwLock::new(()));
+        //let lock = self
+        //    .dead_locks
+        //    .entry(id.to_string())
+        //    .or_insert(RwLock::new(()));
 
-        let _locked = lock.write().await;
+        //let _locked = lock.write().await;
 
         let dead = State {
             state: EventType::Dead,

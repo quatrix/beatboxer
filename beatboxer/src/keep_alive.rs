@@ -161,8 +161,8 @@ impl KeepAliveTrait for KeepAlive {
     }
 
     async fn pulse(&self, id: &str) -> i64 {
-        let lock = self.locks.entry(id.to_string()).or_insert(RwLock::new(()));
-        let _locked = lock.write().await;
+        //let lock = self.locks.entry(id.to_string()).or_insert(RwLock::new(()));
+        //let _locked = lock.write().await;
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

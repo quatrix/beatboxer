@@ -11,26 +11,33 @@ use stresser::ws_client::ws_client;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::fmt;
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
 use std::iter::zip;
+use std::sync::Mutex;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::oneshot;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 20)]
 async fn main() {
+    let config = Arc::new(Config::parse());
+
+    fs::create_dir_all(&config.log_dir).expect("couldn't create log dir");
+    let log_filename = format!("{}/stress_test.log", config.log_dir);
+    let log_file = File::create(&log_filename).expect("can't create log file");
+
     tracing_subscriber::registry()
+        .with(fmt::Layer::default())
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "example_error_handling_and_dependency_injection=debug".into())
                 .add_directive(LevelFilter::INFO.into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(Mutex::new(log_file)))
         .init();
-
-    let config = Arc::new(Config::parse());
 
     info!("starting stress test. config: {:?}", config);
 
@@ -95,7 +102,7 @@ async fn main() {
         match r {
             Ok(r) => {
                 actual.insert(r.get_name(), r.get_grouped_events());
-                let filename = format!("/tmp/ws_{}.log", r.get_name());
+                let filename = format!("{}/ws_{}.log", config.log_dir, r.get_name());
                 info!("writing ws msgs into {:?}", filename);
                 fs::write(&filename, r.get_events().join("\n")).unwrap();
             }
@@ -197,7 +204,7 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
     if expected.len() != actual.len() {
         error!("[{}] - not the same events!", name);
 
-        //print_expected_and_actual(name, &expected, actual);
+        print_expected_and_actual(name, &expected, actual);
 
         while let Some((a_1, a_2)) = actual.iter().next_tuple() {
             if a_1.event == EventType::Connect && a_1.event == a_2.event {
@@ -220,7 +227,7 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
         if e.event != a.event {
             error!("[{}] - expected {:?} got {:?}", name, e.event, a.event);
 
-            //print_expected_and_actual(name, &expected, actual);
+            print_expected_and_actual(name, &expected, actual);
             return DiffResult::UnexpectedEvent;
         }
 
@@ -235,14 +242,14 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
                             name, since_connect, iso8601(&e.ts), iso8601(&a.ts)
                         );
 
-                        //print_expected_and_actual(name, &expected, actual);
+                        print_expected_and_actual(name, &expected, actual);
                         return DiffResult::ConnectTooLate;
                     }
                 }
                 Err(d) => {
                     if d.duration() > Duration::from_millis(100) {
                         error!("[{}] - actual connect came before expected?? {:?}", name, d);
-                        //print_expected_and_actual(name, &expected, actual);
+                        print_expected_and_actual(name, &expected, actual);
                         return DiffResult::ConnectTooSoon;
                     }
                 }
@@ -257,7 +264,7 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
                             "[{}] - got dead event too late [{:?}], device died at {} got dead event at {}",
                             name, since_dead, iso8601(&e.ts), iso8601(&a.ts)
                         );
-                        //print_expected_and_actual(name, &expected, actual);
+                        print_expected_and_actual(name, &expected, actual);
 
                         return DiffResult::DeadTooLate;
                     }
@@ -268,7 +275,7 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
                             name, since_dead, iso8601(&e.ts), iso8601(&a.ts)
                         );
 
-                        //print_expected_and_actual(name, &expected, actual);
+                        print_expected_and_actual(name, &expected, actual);
                         return DiffResult::DeadTooSoon;
                     }
                 }

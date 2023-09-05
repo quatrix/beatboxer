@@ -28,4 +28,7 @@ pub struct Config {
 
     #[arg(long, default_value = "5")]
     pub death_rounds: u32,
+
+    #[arg(long, default_value = "/tmp/stress_test/")]
+    pub log_dir: String,
 }

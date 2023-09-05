@@ -31,4 +31,10 @@ pub struct Config {
 
     #[arg(long, default_value = "/tmp/stress_test/")]
     pub log_dir: String,
+
+    #[arg(long, default_value = "false")]
+    pub upload_to_s3: bool,
+
+    #[arg(long)]
+    pub s3_bucket: Option<String>,
 }

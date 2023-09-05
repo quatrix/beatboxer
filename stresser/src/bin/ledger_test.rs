@@ -1,3 +1,4 @@
+use chrono::Utc;
 use clap::Parser;
 use itertools::Itertools;
 use stresser::config::Config;
@@ -17,6 +18,7 @@ use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::Subs
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::iter::zip;
+use std::process::Command;
 use std::sync::Mutex;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::oneshot;
@@ -116,6 +118,28 @@ async fn main() {
         info!("all good!");
     } else {
         warn!("not so goood.")
+    }
+
+    if config.upload_to_s3 {
+        let s3_bucket = config
+            .s3_bucket
+            .clone()
+            .expect("is upload_to_s3 is set, must provide s3_bucket");
+
+        let now = Utc::now();
+
+        let current_time = now.format("%Y/%m/%d/%H_%M_%S/").to_string();
+
+        let prefix = format!("s3://{}/{}", s3_bucket, current_time);
+
+        Command::new("aws")
+            .arg("s3")
+            .arg("cp")
+            .arg("--recursive")
+            .arg(&config.log_dir)
+            .arg(&prefix)
+            .output()
+            .expect("failed to execute process");
     }
 }
 

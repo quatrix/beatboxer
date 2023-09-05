@@ -197,7 +197,7 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
     if expected.len() != actual.len() {
         error!("[{}] - not the same events!", name);
 
-        print_expected_and_actual(name, &expected, actual);
+        //print_expected_and_actual(name, &expected, actual);
 
         while let Some((a_1, a_2)) = actual.iter().next_tuple() {
             if a_1.event == EventType::Connect && a_1.event == a_2.event {
@@ -220,7 +220,7 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
         if e.event != a.event {
             error!("[{}] - expected {:?} got {:?}", name, e.event, a.event);
 
-            print_expected_and_actual(name, &expected, actual);
+            //print_expected_and_actual(name, &expected, actual);
             return DiffResult::UnexpectedEvent;
         }
 
@@ -235,14 +235,14 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
                             name, since_connect, iso8601(&e.ts), iso8601(&a.ts)
                         );
 
-                        print_expected_and_actual(name, &expected, actual);
+                        //print_expected_and_actual(name, &expected, actual);
                         return DiffResult::ConnectTooLate;
                     }
                 }
                 Err(d) => {
                     if d.duration() > Duration::from_millis(100) {
                         error!("[{}] - actual connect came before expected?? {:?}", name, d);
-                        print_expected_and_actual(name, &expected, actual);
+                        //print_expected_and_actual(name, &expected, actual);
                         return DiffResult::ConnectTooSoon;
                     }
                 }
@@ -257,7 +257,7 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
                             "[{}] - got dead event too late [{:?}], device died at {} got dead event at {}",
                             name, since_dead, iso8601(&e.ts), iso8601(&a.ts)
                         );
-                        print_expected_and_actual(name, &expected, actual);
+                        //print_expected_and_actual(name, &expected, actual);
 
                         return DiffResult::DeadTooLate;
                     }
@@ -268,7 +268,7 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
                             name, since_dead, iso8601(&e.ts), iso8601(&a.ts)
                         );
 
-                        print_expected_and_actual(name, &expected, actual);
+                        //print_expected_and_actual(name, &expected, actual);
                         return DiffResult::DeadTooSoon;
                     }
                 }

@@ -12,6 +12,7 @@ clap = { version = "4.3.19", features = ["derive"] }
 futures = "0.3.28"
 gethostname = "0.4.3"
 histogram = "0.7.4"
+itertools = "0.11.0"
 kanal = "0.1.0-pre8"
 prost = "0.11.9"
 rand = "0.8.5"

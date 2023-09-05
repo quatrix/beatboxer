@@ -1,4 +1,5 @@
 use clap::Parser;
+use itertools::Itertools;
 use stresser::config::Config;
 use stresser::event::{iso8601, Event, EventType};
 use stresser::id_generation::generate_ids;
@@ -8,7 +9,7 @@ use stresser::strategies::ledger::Ledger;
 use stresser::strategies::Strategy;
 use stresser::ws_client::ws_client;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
@@ -106,6 +107,8 @@ async fn main() {
 
     if compare_results(expected, actual) {
         info!("all good!");
+    } else {
+        warn!("not so goood.")
     }
 }
 
@@ -113,18 +116,27 @@ fn compare_results(
     expected: HashMap<String, Vec<Event>>,
     actual: HashMap<String, HashMap<String, Vec<Event>>>,
 ) -> bool {
-    let mut diff = 0;
     let mut same = 0;
+    let mut diff = 0;
     let mut not_found = 0;
+    let mut results: HashMap<String, HashMap<DiffResult, u32>> = HashMap::new();
 
     for (id, ledger) in &expected {
         for (name, actual) in &actual {
             if let Some(actual_ledger) = actual.get(id) {
-                if !is_same(name, ledger, actual_ledger) {
-                    diff += 1;
-                } else {
+                let r = is_same(name, ledger, actual_ledger);
+
+                if r == DiffResult::Ok {
                     same += 1;
+                } else {
+                    diff += 1;
                 }
+
+                *results
+                    .entry(name.to_string())
+                    .or_insert(HashMap::new())
+                    .entry(r)
+                    .or_insert(0) += 1;
             } else {
                 error!("[{}] - {} not found!", name, id);
                 not_found += 1;
@@ -132,19 +144,19 @@ fn compare_results(
         }
     }
 
-    info!("same: {}", same);
+    info!("----- REPORT ----");
 
-    if diff > 0 {
-        error!("diffs! {}", diff);
-        return false;
+    info!("same: {} diff: {} not_found: {}", same, diff, not_found);
+
+    for (name, results) in results {
+        info!("results for {}", name);
+
+        for (r_key, counts) in results {
+            info!("\t{:?} -> {}", r_key, counts);
+        }
     }
 
-    if not_found > 0 {
-        error!("ids not found! {}", not_found);
-        return false;
-    }
-
-    true
+    diff == 0 && not_found == 0
 }
 
 fn print_expected_and_actual(name: &str, expected: &Vec<&Event>, actual: &Vec<Event>) {
@@ -159,7 +171,24 @@ fn print_expected_and_actual(name: &str, expected: &Vec<&Event>, actual: &Vec<Ev
         error!("[{}] - \t{:?} 🍣", name, e)
     }
 }
-fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> bool {
+
+#[derive(Eq, Hash, PartialEq, Debug)]
+enum DiffResult {
+    ConnectTooLate,
+    ConnectTooSoon,
+    DeadTooSoon,
+    DeadBeforeExpected,
+    DeadTooLate,
+    MissingEvents,
+    ExtraEvents,
+    UnexpectedEvent,
+    TwoConnects,
+    TwoDeads,
+    Wat,
+    Ok,
+}
+
+fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> DiffResult {
     let expected = expected
         .iter()
         .filter(|e| e.event != EventType::Beat && e.event != EventType::Skip)
@@ -170,7 +199,21 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> bool {
 
         print_expected_and_actual(name, &expected, actual);
 
-        return false;
+        while let Some((a_1, a_2)) = actual.iter().next_tuple() {
+            if a_1.event == EventType::Connect && a_1.event == a_2.event {
+                return DiffResult::TwoConnects;
+            }
+
+            if a_1.event == EventType::Dead && a_1.event == a_2.event {
+                return DiffResult::TwoDeads;
+            }
+        }
+
+        if expected.len() > actual.len() {
+            return DiffResult::MissingEvents;
+        } else {
+            return DiffResult::ExtraEvents;
+        }
     }
 
     for (e, a) in zip(&expected, actual) {
@@ -178,7 +221,7 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> bool {
             error!("[{}] - expected {:?} got {:?}", name, e.event, a.event);
 
             print_expected_and_actual(name, &expected, actual);
-            return false;
+            return DiffResult::UnexpectedEvent;
         }
 
         if e.event == EventType::Connect {
@@ -193,14 +236,14 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> bool {
                         );
 
                         print_expected_and_actual(name, &expected, actual);
-                        return false;
+                        return DiffResult::ConnectTooLate;
                     }
                 }
                 Err(d) => {
                     if d.duration() > Duration::from_millis(100) {
                         error!("[{}] - actual connect came before expected?? {:?}", name, d);
                         print_expected_and_actual(name, &expected, actual);
-                        return false;
+                        return DiffResult::ConnectTooSoon;
                     }
                 }
             }
@@ -216,7 +259,7 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> bool {
                         );
                         print_expected_and_actual(name, &expected, actual);
 
-                        return false;
+                        return DiffResult::DeadTooLate;
                     }
 
                     if since_dead < Duration::from_secs(19) {
@@ -226,19 +269,19 @@ fn is_same(name: &str, expected: &[Event], actual: &Vec<Event>) -> bool {
                         );
 
                         print_expected_and_actual(name, &expected, actual);
-                        return false;
+                        return DiffResult::DeadTooSoon;
                     }
                 }
                 Err(d) => {
                     error!("[{}] - actual dead came before expected?? {:?}", name, d);
-                    return false;
+                    return DiffResult::DeadBeforeExpected;
                 }
             }
         } else {
             error!("[{}] - got unexpected event {:?}", name, e.event);
-            return false;
+            return DiffResult::Wat;
         }
     }
 
-    true
+    DiffResult::Ok
 }

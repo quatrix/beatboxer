@@ -144,6 +144,7 @@ enum Command {
     Dead(DeadCommand),
     ParseError(String),
     Unknown(String),
+    SyncMarker,
     Ping,
     Closed,
 }
@@ -222,14 +223,25 @@ fn parse_ping(input: &str) -> IResult<&str, Command> {
     Ok((input, Command::Ping))
 }
 
+fn parse_sync_marker(input: &str) -> IResult<&str, Command> {
+    let (input, _) = tag("S_MARK")(input)?;
+    Ok((input, Command::SyncMarker))
+}
+
 fn parse_closed(input: &str) -> IResult<&str, Command> {
     let (input, _) = eof(input)?; // check if the input is empty
     Ok((input, Command::Closed))
 }
 
 fn parse_command(input: &str) -> Command {
-    let (rest, cmd) = alt((parse_closed, parse_ka, parse_dead, parse_ping))(input)
-        .unwrap_or((input, Command::Unknown(input.to_string())));
+    let (rest, cmd) = alt((
+        parse_closed,
+        parse_ka,
+        parse_dead,
+        parse_ping,
+        parse_sync_marker,
+    ))(input)
+    .unwrap_or((input, Command::Unknown(input.to_string())));
     if rest.trim().is_empty() {
         cmd
     } else {
@@ -270,20 +282,16 @@ impl KeepAlive {
 
                             let mut socket = BufReader::new(socket);
 
-                            match do_sync(&addr, &mut socket, &kac).await {
-                                Ok(_) => {
-                                    cluster_status.set_node_status(&addr, NodeStatus::Synched);
-                                    cluster_status.update_last_sync(&addr);
-                                    connect_attempts = 0;
-                                }
-                                Err(e) => {
-                                    error!("[{}] Failed to sync: {:?}", addr, e);
-                                    cluster_status.set_node_status(&addr, NodeStatus::SyncFailed);
-                                    continue;
-                                }
+                            if let Err(e) = do_sync(&addr, &mut socket, &kac).await {
+                                error!("[{}] Failed to sync: {:?}", addr, e);
+                                cluster_status.set_node_status(&addr, NodeStatus::SyncFailed);
+                                continue;
                             }
 
-                            info!("[{}] Synched. listening on updates...", addr);
+                            info!(
+                                "[{}] Mostly Synched. listening on updates...[waiting for marker]",
+                                addr
+                            );
 
                             loop {
                                 let command = match get_command(&mut socket).await {
@@ -322,6 +330,12 @@ impl KeepAlive {
                                     Command::Dead(dd) => {
                                         //info!("[{}] got DD update: {:?}", addr, dd);
                                         kac.dead(&dd.id, dd.last_ka, dd.ts_of_death).await;
+                                    }
+                                    Command::SyncMarker => {
+                                        info!("[{}] Got Sync Marker!", addr);
+                                        cluster_status.set_node_status(&addr, NodeStatus::Synched);
+                                        cluster_status.update_last_sync(&addr);
+                                        connect_attempts = 0;
                                     }
                                     Command::Ping => {
                                         if let Err(e) = write(&mut socket, b"PONG\n").await {

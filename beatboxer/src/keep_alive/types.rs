@@ -22,6 +22,7 @@ pub enum Message {
     Ping,
     KeepAliveUpdate(KeepAliveUpdate),
     DeadUpdate(DeadUpdate),
+    SyncMarker,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialOrd, PartialEq, Deserialize, Serialize)]

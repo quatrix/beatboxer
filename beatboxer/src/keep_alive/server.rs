@@ -12,8 +12,8 @@ use anyhow::{anyhow, Result};
 use arrayvec::ArrayString;
 use std::net::SocketAddr;
 use std::{sync::Arc, time::Instant};
-use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Receiver};
+use tokio::{net::TcpStream, sync::mpsc::error::TrySendError};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -46,12 +46,15 @@ async fn send_blob(
 }
 
 impl KeepAlive {
-    pub async fn subscribe_to_commands(&self, addr: SocketAddr) -> Receiver<Message> {
+    pub async fn subscribe_to_commands(
+        &self,
+        addr: SocketAddr,
+    ) -> (mpsc::Sender<Message>, mpsc::Receiver<Message>) {
         let mut txs = self.txs.write().await;
         let (tx, rx) = mpsc::channel(3_000_000);
-        txs.push((addr.to_string(), tx));
+        txs.push((addr.to_string(), tx.clone()));
 
-        rx
+        (tx, rx)
     }
 
     pub async fn listen(&self) -> Result<()> {
@@ -65,7 +68,7 @@ impl KeepAlive {
             let (mut socket, addr) = listener.accept().await?;
             info!("[{}] Connected client!", addr);
 
-            let mut rx = self.subscribe_to_commands(addr).await;
+            let (tx, mut rx) = self.subscribe_to_commands(addr).await;
             let kac = Arc::clone(&self.keep_alives);
 
             tokio::spawn(async move {
@@ -79,6 +82,20 @@ impl KeepAlive {
                         match sync_with_client(&mut socket, &addr, &kac).await {
                             Ok(_) => {
                                 last_pong = Instant::now();
+
+                                // sending special marker command so client knows
+                                // it seen all events that happened during sync
+                                match tx.try_send(Message::SyncMarker) {
+                                    Ok(_) => {}
+                                    Err(TrySendError::Closed(_)) => {
+                                        error!("[{}] (sync_marker) Channel closed.", addr);
+                                        break;
+                                    }
+                                    Err(TrySendError::Full(_)) => {
+                                        error!("[{}] (sync_marker) Channel full.", addr);
+                                        break;
+                                    }
+                                }
                                 already_synched = true;
                             }
                             Err(e) => {
@@ -125,6 +142,11 @@ async fn handle_client_commands(
 
         v = rx.recv() => match v {
             Some(message) => match message {
+                Message::SyncMarker=> {
+                    let _ = timeout(*SOCKET_WRITE_TIMEOUT, socket.write_all("S_MARK\n".as_bytes())).await?;
+                    debug!("[{}] Sent SYNCHED marekr.", addr);
+                    Ok(())
+                }
                 Message::Ping => {
                     debug!("[{}] Sending Ping", addr);
                     let elapsed_since_last_pong = last_pong.elapsed();

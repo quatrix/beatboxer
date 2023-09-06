@@ -69,10 +69,12 @@ impl ClusterStatus {
     pub fn set_node_status(&self, node: &str, new_status: NodeStatus) {
         let prev_ready = self.is_ready();
 
-        let mut m = self.nodes.get_mut(&node.to_string()).unwrap();
-        let node = m.value_mut();
-        node.status = new_status;
-        node.status_since = Some(Utc::now());
+        {
+            let mut m = self.nodes.get_mut(&node.to_string()).unwrap();
+            let node = m.value_mut();
+            node.status = new_status;
+            node.status_since = Some(Utc::now());
+        }
 
         let current_ready = self.is_ready();
 

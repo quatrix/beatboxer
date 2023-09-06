@@ -97,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    info!("starting beatboxer! args: {:?}", args);
     let txs = Arc::new(RwLock::new(Vec::new()));
     let storage = get_storage(Arc::clone(&txs), args.use_rocksdb, args.http_port);
 

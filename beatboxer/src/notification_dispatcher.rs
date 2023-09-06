@@ -22,7 +22,7 @@ impl NotificationDispatcher {
         NotificationDispatcher {
             txs: Arc::new(RwLock::new(Vec::new())),
             events_history,
-            sent_events: RwLock::new(LruCache::new(NonZeroUsize::new(10000).unwrap())),
+            sent_events: RwLock::new(LruCache::new(NonZeroUsize::new(10_000).unwrap())),
         }
     }
 

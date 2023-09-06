@@ -89,12 +89,6 @@ async fn do_sync(
     socket: &mut BufReader<TcpStream>,
     kac: &Arc<dyn Storage + Send + Sync>,
 ) -> Result<()> {
-    info!(
-        "waiting {:?} (+1s) before starting sync, to let things get commited.",
-        *CONSOLIDATION_WINDOW
-    );
-    tokio::time::sleep(*CONSOLIDATION_WINDOW + Duration::from_secs(1)).await;
-
     info!("[🔄] Sending SYNC request to {}...", addr);
     let t_e2e_0 = std::time::Instant::now();
 
@@ -259,11 +253,15 @@ impl KeepAlive {
             tokio::spawn(async move {
                 let mut printed_connecting = false;
                 let mut printed_conn_error = false;
+                let max_connect_attempts = 5;
+                let mut connect_attempts = 0;
                 loop {
                     if !printed_connecting {
                         info!("Connecting to {}", addr);
                         printed_connecting = true;
                     }
+
+                    connect_attempts += 1;
 
                     match TcpStream::connect(&addr).await {
                         Ok(socket) => {
@@ -276,6 +274,7 @@ impl KeepAlive {
                                 Ok(_) => {
                                     cluster_status.set_node_status(&addr, NodeStatus::Synched);
                                     cluster_status.update_last_sync(&addr);
+                                    connect_attempts = 0;
                                 }
                                 Err(e) => {
                                     error!("[{}] Failed to sync: {:?}", addr, e);
@@ -344,7 +343,10 @@ impl KeepAlive {
                             }
                         }
                         Err(e) => {
-                            cluster_status.set_node_status(&addr, NodeStatus::Dead);
+                            if connect_attempts > max_connect_attempts {
+                                // don't be so fast to declare a node dead
+                                cluster_status.set_node_status(&addr, NodeStatus::Dead);
+                            }
                             if !printed_conn_error {
                                 error!("[{}] Error connecting: {}, trying again...", addr, e);
                                 printed_conn_error = true;

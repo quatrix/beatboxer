@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::Serialize;
+use tracing::info;
 
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -66,10 +67,22 @@ impl ClusterStatus {
     }
 
     pub fn set_node_status(&self, node: &str, new_status: NodeStatus) {
+        let prev_ready = self.is_ready();
+
         let mut m = self.nodes.get_mut(&node.to_string()).unwrap();
         let node = m.value_mut();
         node.status = new_status;
         node.status_since = Some(Utc::now());
+
+        let current_ready = self.is_ready();
+
+        if prev_ready != current_ready {
+            if current_ready {
+                info!("🎆 cluster status changed: READY");
+            } else {
+                info!("🎆 cluster status changed: NOT_READY");
+            }
+        }
     }
 
     pub fn update_last_ping(&self, node: &str) {

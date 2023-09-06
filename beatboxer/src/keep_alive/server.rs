@@ -48,7 +48,7 @@ async fn send_blob(
 impl KeepAlive {
     pub async fn subscribe_to_commands(&self, addr: SocketAddr) -> Receiver<Message> {
         let mut txs = self.txs.write().await;
-        let (tx, rx) = mpsc::channel(102400);
+        let (tx, rx) = mpsc::channel(3_000_000);
         txs.push((addr.to_string(), tx));
 
         rx

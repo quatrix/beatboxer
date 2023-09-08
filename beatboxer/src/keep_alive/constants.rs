@@ -29,16 +29,6 @@ lazy_static! {
         from_env("CONSOLIDATION_WINDOW_MS", Duration::from_secs(2));
 }
 
-pub fn is_dead(ts: i64) -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-
-    let death_horizon = now - (DEAD_DEVICE_TIMEOUT.as_millis() as i64);
-    ts <= death_horizon
-}
-
 #[cfg(test)]
 mod test {
     use super::*;

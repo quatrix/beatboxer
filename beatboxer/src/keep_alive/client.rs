@@ -30,6 +30,7 @@ use std::{
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
+    sync::Mutex,
     time::timeout,
 };
 use tracing::{debug, error, info};
@@ -88,7 +89,9 @@ async fn do_sync(
     addr: &str,
     socket: &mut BufReader<TcpStream>,
     kac: &Arc<dyn Storage + Send + Sync>,
+    sync_lock: &Arc<Mutex<()>>,
 ) -> Result<()> {
+    let _locked = sync_lock.lock().await;
     info!("[🔄] Sending SYNC request to {}...", addr);
     let t_e2e_0 = std::time::Instant::now();
 
@@ -258,9 +261,12 @@ async fn get_command(socket: &mut BufReader<TcpStream>) -> Result<Command> {
 
 impl KeepAlive {
     pub fn connect_to_nodes(&self) {
+        let sync_lock = Arc::new(Mutex::new(()));
+
         for addr in self.nodes.clone() {
             let kac = Arc::clone(&self.keep_alives);
             let cluster_status = Arc::clone(&self.cluster_status);
+            let sync_lock = Arc::clone(&sync_lock);
 
             tokio::spawn(async move {
                 let mut printed_connecting = false;
@@ -282,7 +288,7 @@ impl KeepAlive {
 
                             let mut socket = BufReader::new(socket);
 
-                            if let Err(e) = do_sync(&addr, &mut socket, &kac).await {
+                            if let Err(e) = do_sync(&addr, &mut socket, &kac, &sync_lock).await {
                                 error!("[{}] Failed to sync: {:?}", addr, e);
                                 cluster_status.set_node_status(&addr, NodeStatus::SyncFailed);
                                 continue;

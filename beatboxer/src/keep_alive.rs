@@ -5,9 +5,8 @@ pub mod server;
 pub mod types;
 
 use anyhow::Result;
-use dashmap::DashMap;
 use serde::Serialize;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc::{error::TrySendError, Receiver, Sender};
 
 use axum::async_trait;
@@ -15,8 +14,8 @@ use axum::async_trait;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
-use crate::keep_alive::cluster_status::ClusterStatus;
 use crate::storage::Storage;
+use crate::{keep_alive::cluster_status::ClusterStatus, storage::memory::zset::DeviceState};
 
 use self::types::{Event, EventType, KeepAliveUpdate, Message};
 
@@ -27,7 +26,6 @@ pub struct KeepAlive {
     listen_port: u16,
     nodes: Vec<String>,
     keep_alives: Arc<dyn Storage + Send + Sync>,
-    locks: DashMap<String, RwLock<()>>,
     txs: SenderChannels,
     cluster_status: Arc<ClusterStatus>,
 }
@@ -35,7 +33,7 @@ pub struct KeepAlive {
 #[async_trait]
 pub trait KeepAliveTrait {
     async fn pulse(&self, id: &str) -> i64;
-    async fn get(&self, id: &str) -> Option<i64>;
+    async fn get(&self, id: &str) -> Option<DeviceState>;
     async fn subscribe(&self, offset: Option<i64>) -> Result<Receiver<Event>>;
     async fn is_ready(&self) -> bool;
     async fn cluster_status(&self) -> ClusterStatusResponse;
@@ -102,7 +100,6 @@ impl KeepAlive {
             keep_alives: storage,
             txs,
             cluster_status: Arc::new(ClusterStatus::new(nodes)),
-            locks: DashMap::new(),
         }
     }
 
@@ -155,15 +152,11 @@ impl KeepAlive {
 
 #[async_trait]
 impl KeepAliveTrait for KeepAlive {
-    async fn get(&self, id: &str) -> Option<i64> {
-        let device_state = self.keep_alives.get(id).await;
-        device_state.map(|d| d.ts)
+    async fn get(&self, id: &str) -> Option<DeviceState> {
+        self.keep_alives.get(id).await
     }
 
     async fn pulse(&self, id: &str) -> i64 {
-        //let lock = self.locks.entry(id.to_string()).or_insert(RwLock::new(()));
-        //let _locked = lock.write().await;
-
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

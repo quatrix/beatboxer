@@ -2,7 +2,6 @@ use anyhow::Result;
 use beatboxer::keep_alive::SenderChannels;
 use beatboxer::{
     keep_alive::{
-        constants::is_dead,
         types::{Event, EventType},
         KeepAlive, KeepAliveTrait,
     },
@@ -174,7 +173,7 @@ async fn get_ka_handler(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match keep_alive.get(&id).await {
-        Some(ts) => (StatusCode::OK, ts.to_string()),
+        Some(ds) => (StatusCode::OK, ds.ts.to_string()), // FIXME: probably can return the whole ds
         None => (StatusCode::NOT_FOUND, "Not found".to_string()),
     }
 }
@@ -212,9 +211,11 @@ async fn handle_socket(
         loop {
             if let Some(event) = rx.recv().await {
                 let current_state = match keep_alive.get(&event.id).await {
-                    Some(ts) if is_dead(ts) => EventType::Dead,
-                    Some(_) => EventType::Connected,
-                    None => EventType::Unknown,
+                    Some(ds) => ds.state,
+                    None => {
+                        error!("wat, how can we not have current state?? {}", event.id);
+                        EventType::Unknown
+                    }
                 };
 
                 let msg = axum::extract::ws::Message::Text(format!(

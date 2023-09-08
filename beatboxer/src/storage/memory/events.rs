@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::keep_alive::types::{Event, EventType};
 
@@ -117,18 +117,34 @@ impl Events {
     }
 }
 
-fn merge_without_duplicates(a: &VecDeque<Event>, b: &VecDeque<Event>) -> VecDeque<Event> {
+fn merge_without_duplicates(ours: &VecDeque<Event>, theirs: &VecDeque<Event>) -> VecDeque<Event> {
+    //let mut new_events = VecDeque::new();
     let mut joined = VecDeque::new();
     let mut seen = HashSet::new();
 
-    for item in a.iter().chain(b.iter()) {
+    for item in ours.iter() {
+        seen.insert(item);
+        joined.push_back(item.clone());
+    }
+
+    for item in theirs.iter() {
         if !seen.contains(&item) {
             joined.push_back(item.clone());
+            //new_events.push_back(item.clone());
             seen.insert(item);
         }
     }
 
     joined.make_contiguous().sort();
+    //new_events.make_contiguous().sort();
+
+    // don't do it for an initial sync
+    // only for laters syncs
+    //if !ours.is_empty() {
+    //    for item in new_events {
+    //        debug!("new event: {:?}", item);
+    //    }
+    //}
 
     let mut result = VecDeque::new();
     let mut connected: HashSet<String> = HashSet::new();

@@ -1,29 +1,45 @@
 use std::{
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{anyhow, Result};
-use kanal::AsyncReceiver;
+use kanal::{AsyncReceiver, AsyncSender};
 use rand::Rng;
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
-use crate::{config::Config, pulse::Pulse};
+use crate::{
+    config::Config,
+    event::{Event, EventType},
+    pulse::Pulse,
+};
 
 pub async fn pulser(
     tx: Option<kanal::AsyncSender<Pulse>>,
     config: Arc<Config>,
     ids_rx: AsyncReceiver<String>,
+    pulse_tx: AsyncSender<Event>,
 ) {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(5000))
+        .timeout(Duration::from_millis(500))
         .build()
         .unwrap();
 
     while let Ok(id) = ids_rx.recv().await {
         if let Ok((node, server_ts)) = send_pulse_to_random_node(&client, &id, &config.nodes).await
         {
+            if let Err(e) = pulse_tx
+                .send(Event {
+                    id: id.to_string(),
+                    ts: SystemTime::now(),
+                    event: EventType::Beat,
+                })
+                .await
+            {
+                error!("couldn't send pulse event log: {:?}", e);
+            }
+
             debug!("id: {} to node {} - ts: {}", id, node, server_ts);
             if let Some(tx) = &tx {
                 if let Err(e) = tx
@@ -73,37 +89,27 @@ pub fn another_pulser(
     futures
 }
 
+async fn pulse(client: &reqwest::Client, url: &str) -> Result<i64> {
+    let response = client.post(url).send().await?;
+    let text = response.text().await?;
+    let ts = text.parse::<i64>()?;
+    Ok(ts)
+}
+
 async fn send_pulse_to_random_node<'a>(
     client: &'a reqwest::Client,
     id: &'a str,
     nodes: &'a Vec<String>,
 ) -> Result<(&'a str, i64)> {
-    for _ in 0..100 {
+    for _ in 0..10 {
         let node = &nodes[rand::thread_rng().gen_range(0..nodes.len())];
+        let url = format!("http://{node}/pulse/{id}");
 
-        match client
-            .post(format!("http://{node}/pulse/{id}"))
-            .send()
-            .await
-        {
-            Ok(response) => match response.text().await {
-                Ok(text) => match text.parse::<i64>() {
-                    Ok(ts) => {
-                        return Ok((node, ts));
-                    }
-                    Err(e) => {
-                        debug!("error doing post request: {:?}", e);
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                },
-                Err(e) => {
-                    debug!("error doing post request: {:?}", e);
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            },
+        match pulse(client, &url).await {
+            Ok(ts) => return Ok((node, ts)),
             Err(e) => {
-                debug!("error doing post request: {:?}", e);
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                debug!("error pulsing {}: {:?}", url, e);
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
     }

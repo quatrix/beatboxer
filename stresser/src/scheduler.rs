@@ -192,10 +192,12 @@ pub fn schedule(
 pub async fn group_ledgers_by_id(ledger_rx: &AsyncReceiver<Event>) -> HashMap<String, Vec<Event>> {
     let mut res = HashMap::new();
 
-    while let Ok(event) = ledger_rx.recv().await {
-        res.entry(event.id.to_string())
-            .or_insert(Vec::new())
-            .push(event.clone())
+    while let Ok(event) = ledger_rx.try_recv() {
+        if let Some(event) = event {
+            res.entry(event.id.to_string())
+                .or_insert(Vec::new())
+                .push(event.clone())
+        }
     }
 
     res

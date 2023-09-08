@@ -72,28 +72,25 @@ async fn main() {
     info!("all ws ready!");
 
     let (ids_rx, ledger_rx) = generate_ids(&config);
+    let (pulse_tx, pulse_rx) = kanal::unbounded_async();
 
     for _ in 0..config.pulse_workers {
         let config = Arc::clone(&config);
-        pulses_futures.push(tokio::spawn(pulser(None, config, ids_rx.clone())));
+        pulses_futures.push(tokio::spawn(pulser(
+            None,
+            config,
+            ids_rx.clone(),
+            pulse_tx.clone(),
+        )));
     }
+
+    drop(pulse_tx);
 
     tokio::spawn(start_the_chaos(
         config.nodes.clone(),
         config.node_death_probability,
         Duration::from_millis(config.chaos_interval_ms),
     ));
-
-    /*
-    let ids = (0..config.total_ids)
-        .map(|i| format!("{:08x}", i))
-        .collect();
-    let interval = Duration::from_millis(config.time_between_beats_ms);
-    let rounds = config.rounds;
-    let nodes = config.nodes.clone();
-    let pulses_futures = another_pulser(ids, interval, rounds, nodes);
-    */
-
     futures::future::join_all(pulses_futures).await;
 
     // waiting for death
@@ -120,8 +117,11 @@ async fn main() {
     }
 
     let expected = group_ledgers_by_id(&ledger_rx).await;
+    let pulses_sent = group_ledgers_by_id(&pulse_rx).await;
 
-    if compare_results(expected, actual) {
+    //info!("pulses_sent: {:?}", pulses_sent);
+
+    if compare_results(expected, pulses_sent, actual) {
         info!("all good!");
     } else {
         warn!("not so goood.")
@@ -152,6 +152,7 @@ async fn main() {
 
 fn compare_results(
     expected: HashMap<String, Vec<Event>>,
+    pulses_sent: HashMap<String, Vec<Event>>,
     actual: HashMap<String, HashMap<String, Vec<Event>>>,
 ) -> bool {
     let mut same = 0;
@@ -167,7 +168,12 @@ fn compare_results(
                 if r == DiffResult::Ok {
                     same += 1;
                 } else {
-                    print_expected_and_actual(name, ledger, actual_ledger);
+                    print_expected_and_actual(
+                        name,
+                        ledger,
+                        actual_ledger,
+                        pulses_sent.get(id).unwrap(),
+                    );
                     diff += 1;
                 }
 
@@ -198,11 +204,20 @@ fn compare_results(
     diff == 0 && not_found == 0
 }
 
-fn print_expected_and_actual(name: &str, expected: &Vec<Event>, actual: &Vec<Event>) {
+fn print_expected_and_actual(
+    name: &str,
+    expected: &Vec<Event>,
+    actual: &Vec<Event>,
+    pulse_sent: &Vec<Event>,
+) {
     error!("[{}] - expected:", name);
-
     for e in expected {
         error!("[{}] - \t{:?} 🐠", name, e)
+    }
+
+    error!("[{}] - pulses sent:", name);
+    for e in pulse_sent {
+        error!("[{}] - \t{:?} 💜", name, e)
     }
 
     error!("[{}] - actual:", name);
